@@ -9,7 +9,7 @@ import subprocess
 import sys
 import time
 
-import paho.mqtt.client as mqtt
+import paho.mqtt.client as mqtt # type: ignore
 
 
 # --------------------
