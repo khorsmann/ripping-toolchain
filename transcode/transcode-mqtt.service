@@ -1,0 +1,20 @@
+# /etc/systemd/system/transcode-mqtt.service
+[Unit]
+Description=MQTT Transcode Worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/transcode_mqtt.py
+Restart=always
+RestartSec=5
+
+# ---- ENV ----
+EnvironmentFile=/etc/transcode-mqtt.env
+
+StandardOutput=append:/var/log/transcode-mqtt.log
+StandardError=append:/var/log/transcode-mqtt.log
+
+[Install]
+WantedBy=multi-user.target
