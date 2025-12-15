@@ -1,0 +1,17 @@
+- alias: DVD Rip fertig
+  description: Benachrichtigt aufs Handy wenn der Ripper media/rip/done sendet
+  mode: single
+  trigger:
+    - platform: mqtt
+      topic: media/rip/done
+  action:
+    - service: notify.mobile_app_meinphone
+      data:
+        title: "DVD fertig gerippt"
+        message: >
+          {{ trigger.payload_json.series }} S{{ trigger.payload_json.season }}
+          {{ trigger.payload_json.disc }} – {{ trigger.payload_json.episodes }}
+          Episoden liegen jetzt unter {{ trigger.payload_json.path }}.
+        data:
+          ttl: 0
+          priority: high
