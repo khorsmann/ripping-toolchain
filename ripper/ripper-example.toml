@@ -1,0 +1,18 @@
+# Beispielkonfiguration für ripper3.py
+# Werte anpassen und als ripper3.toml speichern.
+
+[mqtt]
+host = "mqtt.example.local"
+port = 1883
+user = "mqtt-user"
+password = "mqtt-pass"
+topic = "media/rip/done"
+
+[dvd]
+device = "/dev/sr0"
+
+[storage]
+base_raw = "/path/to/raw/dvd/output"
+
+[heuristics]
+min_episode_minutes = 20
