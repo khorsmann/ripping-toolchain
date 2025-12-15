@@ -5,8 +5,10 @@ import fcntl
 import json
 import logging
 import os
+import queue
 import subprocess
 import sys
+import threading
 import time
 
 import paho.mqtt.client as mqtt # type: ignore
@@ -154,6 +156,21 @@ def transcode_dir(client, src_dir: Path):
 
 
 # --------------------
+# Worker Thread
+# --------------------
+def worker_loop(client: mqtt.Client, job_queue: queue.Queue):
+    while True:
+        path = job_queue.get()
+        try:
+            logging.info(f"processing queued job for {path}")
+            transcode_dir(client, path)
+        except Exception:
+            logging.exception(f"transcode error while handling {path}")
+        finally:
+            job_queue.task_done()
+
+
+# --------------------
 # MQTT callback
 # --------------------
 def on_message(client, userdata, msg):
@@ -171,13 +188,17 @@ def on_message(client, userdata, msg):
             return
 
         logging.info(f"MQTT job received for {path}")
-        transcode_dir(client, path)
+        if userdata is None:
+            logging.error("no job queue configured – cannot process message")
+            return
+
+        userdata.put(path)
 
     except json.JSONDecodeError:
         logging.warning("invalid JSON payload received")
 
     except Exception:
-        logging.exception("transcode error")
+        logging.exception("failed to enqueue MQTT job")
 
 
 # --------------------
@@ -191,7 +212,12 @@ def main():
 
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
     client.username_pw_set(MQTT_USER, MQTT_PASSWORD)
+    job_queue = queue.Queue()
+    client.user_data_set(job_queue)
     client.on_message = on_message
+
+    worker = threading.Thread(target=worker_loop, args=(client, job_queue), daemon=True)
+    worker.start()
 
     connect_mqtt(client)
 
