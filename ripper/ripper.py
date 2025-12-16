@@ -278,12 +278,15 @@ def main():
 
     episodes_ripped = episode - args.episode_start
 
+    hostname = socket.gethostname().split(".")[0]
+
     payload = {
         "series": args.series,
         "season": args.season,
         "disc": args.disc,
         "path": str(outdir),
         "episodes": episodes_ripped,
+        "hostname": hostname,
         "timestamp": int(time.time()),
     }
 
