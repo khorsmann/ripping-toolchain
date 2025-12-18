@@ -27,6 +27,7 @@ except ModuleNotFoundError:  # pragma: no cover - tomli only if tomllib missing
 # KONFIGURATION
 # =====================
 
+
 def load_config(path: Path) -> dict:
     """
     Lädt TOML-Konfiguration und stellt Typen sicher.
@@ -44,9 +45,17 @@ def load_config(path: Path) -> dict:
         raise ValueError(f"Missing config sections: {', '.join(missing)}")
 
     data["storage"]["base_raw"] = Path(data["storage"]["base_raw"])
+    movie_path = data["storage"].get("movie_path", "Movies")
+    movie_subpath = Path(movie_path)
+    if movie_subpath.is_absolute():
+        raise ValueError("storage.movie_path must be a relative path")
+    data["storage"]["movie_path"] = movie_subpath
     data["heuristics"]["min_episode_minutes"] = int(
         data["heuristics"]["min_episode_minutes"]
     )
+    max_minutes = data["heuristics"].get("max_episode_minutes")
+    if max_minutes is not None:
+        data["heuristics"]["max_episode_minutes"] = int(max_minutes)
     data["mqtt"]["port"] = int(data["mqtt"]["port"])
 
     return data
@@ -129,6 +138,23 @@ def parse_titles(info_text: str):
     return sorted(result, key=lambda x: x["title_id"])
 
 
+def dvd_device_to_disc_target(device: str) -> str:
+    """
+    Mappt ein Linux-Gerät (/dev/sr0, /dev/sr1, …) auf das entsprechende
+    MakeMKV disc:N Target. Fällt auf disc:0 zurück, falls keine Zahl gefunden wird.
+    """
+    device_name = Path(device).name
+    match = re.search(r"(\d+)$", device_name)
+    if match:
+        return f"disc:{match.group(1)}"
+
+    print(
+        f"⚠ DVD-Gerät '{device}' konnte nicht automatisch auf disc:N gemappt werden – "
+        "nutze disc:0"
+    )
+    return "disc:0"
+
+
 def mqtt_test_connection(mqtt_config: dict, timeout=5) -> bool:
     """
     Testet DNS + TCP + MQTT-Handshake.
@@ -192,29 +218,53 @@ def main():
     ap = argparse.ArgumentParser(description="Bulk DVD ripper (MakeMKV + MQTT)")
     default_config = Path(__file__).with_suffix(".toml")
     ap.add_argument(
-        "--series", required=True, help="Serien-Name, z.B. Star_Trek-Deep_Space_Nine"
+        "--series",
+        help="Serien-Name, z.B. Star_Trek-Deep_Space_Nine (Pflicht außer im Film-Modus)",
     )
-    ap.add_argument("--season", required=True, help="Staffel, z.B. 01")
-    ap.add_argument("--disc", required=True, help="Disc-Label, z.B. disc05")
+    ap.add_argument("--season", help="Staffel, z.B. 01 (Pflicht außer im Film-Modus)")
+    ap.add_argument(
+        "--disc", help="Disc-Label, z.B. disc05 (Pflicht außer im Film-Modus)"
+    )
     ap.add_argument(
         "--episode-start",
         type=int,
-        required=True,
-        help="Start-Episodennummer, z.B. 15 für S01E15",
+        help="Start-Episodennummer, z.B. 15 für S01E15 (Pflicht außer im Film-Modus)",
     )
     ap.add_argument(
         "--config",
         default=str(default_config),
         help=f"Pfad zur TOML-Konfiguration (Default: {default_config.name})",
     )
+    ap.add_argument(
+        "--movie",
+        action="store_true",
+        help="Aktiviert Film-Modus (ignoriert max_episode_minutes, rippt nur lange Titel)",
+    )
 
     args = ap.parse_args()
+
+    if not args.movie:
+        required_fields = ("series", "season", "disc", "episode_start")
+        missing = [
+            f"--{field.replace('_', '-')}"
+            for field in required_fields
+            if getattr(args, field) is None
+        ]
+        if missing:
+            ap.error(
+                f"Missing required arguments without --movie: {', '.join(missing)}"
+            )
 
     config = load_config(Path(args.config))
     mqtt_config = config["mqtt"]
     device = config["dvd"]["device"]
+    disc_target = dvd_device_to_disc_target(device)
     base_raw = config["storage"]["base_raw"]
+    movie_subpath = config["storage"]["movie_path"]
     min_episode_minutes = config["heuristics"]["min_episode_minutes"]
+    max_episode_minutes = (
+        None if args.movie else config["heuristics"].get("max_episode_minutes")
+    )
 
     print("🔌 Checking MQTT connectivity…")
     mqtt_ok = mqtt_test_connection(mqtt_config)
@@ -222,14 +272,17 @@ def main():
     if not mqtt_ok:
         print("⚠ MQTT not available – ripping will continue without notification")
 
-    outdir = base_raw / args.series / f"S{args.season}" / args.disc
+    if args.movie:
+        outdir = base_raw / movie_subpath
+        info_file = outdir / "movie.info"
+        movie_output = outdir / "movie.mkv"
+    else:
+        outdir = base_raw / args.series / f"S{args.season}" / args.disc
+        info_file = outdir / f"{args.disc}.info"
     outdir.mkdir(parents=True, exist_ok=True)
 
-    # optional: Info-Log pro Disc
-    info_file = outdir / f"{args.disc}.info"
-
-    print("📀 Analyzing disc…")
-    info_text = run(["makemkvcon", "--noscan", "-r", "info", "disc:0"])
+    print(f"📀 Analyzing disc via {disc_target}…")
+    info_text = run(["makemkvcon", "--noscan", "-r", "info", disc_target])
     info_file.write_text(info_text)
 
     titles = parse_titles(info_text)
@@ -239,7 +292,14 @@ def main():
         return
 
     # Episoden-Heuristik
-    usable = [t for t in titles if t["minutes"] >= min_episode_minutes]
+    usable = [
+        t
+        for t in titles
+        if (
+            t["minutes"] >= min_episode_minutes
+            and (max_episode_minutes is None or t["minutes"] <= max_episode_minutes)
+        )
+    ]
 
     if not usable:
         print("⚠ No episode-sized titles found.")
@@ -252,43 +312,72 @@ def main():
     for t in usable:
         print(f"   - title {t['title_id']}: {t['minutes']} min ({t['duration']})")
 
-    episode = args.episode_start
+    if args.movie:
+        movie_title = max(usable, key=lambda t: (t["minutes"], -t["title_id"]))
+        tid = movie_title["title_id"]
 
-    for t in usable:
-        tid = t["title_id"]
-        filename = f"{args.series}-S{args.season}E{episode:02d}.mkv"
-        out_file = outdir / filename
+        if movie_output.exists():
+            print(f"⏭ movie.mkv existiert bereits, überschreibe Datei")
 
-        if out_file.exists():
-            print(f"⏭ Datei existiert bereits, überspringe: {out_file}")
-            episode += 1
-            continue
+        print(f"🎬 Ripping movie title {tid} → {movie_output}")
+        run(["makemkvcon", "--noscan", "-r", "mkv", disc_target, str(tid), str(outdir)])
 
-        print(f"🎬 Ripping title {tid} → {out_file}")
-        run(["makemkvcon", "--noscan", "-r", "mkv", "disc:0", str(tid), str(outdir)])
-
-        # MakeMKV nennt die Datei meist anders (B1_t00.mkv).
-        # Wir benennen nachträglich um:
-        # finde die neueste MKV in outdir und verschiebe sie auf unseren Zielnamen.
         newest = max(outdir.glob("*.mkv"), key=lambda p: p.stat().st_mtime)
-        if newest != out_file:
-            newest.rename(out_file)
+        if newest != movie_output:
+            newest.rename(movie_output)
 
-        episode += 1
+        episodes_ripped = 1
 
-    episodes_ripped = episode - args.episode_start
+    else:
+        episode = args.episode_start
+
+        for t in usable:
+            tid = t["title_id"]
+            filename = f"{args.series}-S{args.season}E{episode:02d}.mkv"
+            out_file = outdir / filename
+
+            if out_file.exists():
+                print(f"⏭ Datei existiert bereits, überspringe: {out_file}")
+                episode += 1
+                continue
+
+            print(f"🎬 Ripping title {tid} → {out_file}")
+            run(
+                [
+                    "makemkvcon",
+                    "--noscan",
+                    "-r",
+                    "mkv",
+                    disc_target,
+                    str(tid),
+                    str(outdir),
+                ]
+            )
+
+            # MakeMKV nennt die Datei meist anders (B1_t00.mkv).
+            # Wir benennen nachträglich um:
+            # finde die neueste MKV in outdir und verschiebe sie auf unseren Zielnamen.
+            newest = max(outdir.glob("*.mkv"), key=lambda p: p.stat().st_mtime)
+            if newest != out_file:
+                newest.rename(out_file)
+
+            episode += 1
+
+        episodes_ripped = episode - args.episode_start
 
     hostname = socket.gethostname().split(".")[0]
 
     payload = {
-        "series": args.series,
-        "season": args.season,
-        "disc": args.disc,
         "path": str(outdir),
         "episodes": episodes_ripped,
         "hostname": hostname,
         "timestamp": int(time.time()),
+        "mode": "movie" if args.movie else "series",
     }
+
+    payload["series"] = args.series or "movie"
+    payload["season"] = args.season or "00"
+    payload["disc"] = args.disc or ("movie" if args.movie else "")
 
     print("⏏ Ejecting disc…")
     subprocess.run(["eject", device], check=False)
