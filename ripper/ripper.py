@@ -229,7 +229,7 @@ def main():
     info_file = outdir / f"{args.disc}.info"
 
     print("📀 Analyzing disc…")
-    info_text = run(["makemkvcon", "-r", "info", "disc:0"])
+    info_text = run(["makemkvcon", "--noscan", "-r", "info", "disc:0"])
     info_file.write_text(info_text)
 
     titles = parse_titles(info_text)
@@ -265,7 +265,7 @@ def main():
             continue
 
         print(f"🎬 Ripping title {tid} → {out_file}")
-        run(["makemkvcon", "-r", "mkv", "disc:0", str(tid), str(outdir)])
+        run(["makemkvcon", "--noscan", "-r", "mkv", "disc:0", str(tid), str(outdir)])
 
         # MakeMKV nennt die Datei meist anders (B1_t00.mkv).
         # Wir benennen nachträglich um:
