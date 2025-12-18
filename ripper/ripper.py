@@ -17,6 +17,7 @@ import time
 
 import paho.mqtt.client as mqtt
 
+MQTT_PAYLOAD_VERSION = 1
 try:  # Python 3.11+ ships tomllib, tomli is fallback for older versions
     import tomllib
 except ModuleNotFoundError:  # pragma: no cover - tomli only if tomllib missing
@@ -323,20 +324,23 @@ def main():
         print(f"   - title {t['title_id']}: {t['minutes']} min ({t['duration']})")
 
     if movie_mode:
-        movie_title = max(usable, key=lambda t: (t["minutes"], -t["title_id"]))
-        tid = movie_title["title_id"]
-
         if movie_output.exists():
-            print(f"⏭ {movie_output.name} existiert bereits, überschreibe Datei")
+            print(f"⏭ {movie_output.name} existiert bereits, überspringe Ripping")
+            episodes_ripped = 0
+        else:
+            movie_title = max(usable, key=lambda t: (t["minutes"], -t["title_id"]))
+            tid = movie_title["title_id"]
 
-        print(f"🎬 Ripping movie title {tid} → {movie_output}")
-        run(["makemkvcon", "--noscan", "-r", "mkv", disc_target, str(tid), str(outdir)])
+            print(f"🎬 Ripping movie title {tid} → {movie_output}")
+            run(
+                ["makemkvcon", "--noscan", "-r", "mkv", disc_target, str(tid), str(outdir)]
+            )
 
-        newest = max(outdir.glob("*.mkv"), key=lambda p: p.stat().st_mtime)
-        if newest != movie_output:
-            newest.rename(movie_output)
+            newest = max(outdir.glob("*.mkv"), key=lambda p: p.stat().st_mtime)
+            if newest != movie_output:
+                newest.rename(movie_output)
 
-        episodes_ripped = 1
+            episodes_ripped = 1
 
     else:
         episode = args.episode_start
@@ -383,6 +387,7 @@ def main():
         "hostname": hostname,
         "timestamp": int(time.time()),
         "mode": "movie" if movie_mode else "series",
+        "version": MQTT_PAYLOAD_VERSION,
     }
 
     if movie_mode:

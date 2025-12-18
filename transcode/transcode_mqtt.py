@@ -11,7 +11,7 @@ import sys
 import threading
 import time
 
-import paho.mqtt.client as mqtt # type: ignore
+import paho.mqtt.client as mqtt  # type: ignore
 
 
 # --------------------
@@ -50,6 +50,7 @@ MQTT_TOPIC = getenv("MQTT_TOPIC", "media/rip/done")
 MQTT_TOPIC_START = getenv("MQTT_TOPIC_START", "media/transcode/start")
 MQTT_TOPIC_DONE = getenv("MQTT_TOPIC_DONE", "media/transcode/done")
 MQTT_TOPIC_ERROR = getenv("MQTT_TOPIC_ERROR", "media/transcode/error")
+MQTT_PAYLOAD_VERSION = 1
 
 
 # --------------------
@@ -57,6 +58,7 @@ MQTT_TOPIC_ERROR = getenv("MQTT_TOPIC_ERROR", "media/transcode/error")
 # --------------------
 SRC_BASE = Path(getenv("SRC_BASE", required=True))
 DST_BASE = Path(getenv("DST_BASE", required=True))
+MOVIE_DST_BASE = Path(getenv("MOVIE_DST_BASE", str(DST_BASE)))
 
 
 # --------------------
@@ -81,12 +83,34 @@ def connect_mqtt(client: mqtt.Client):
 # --------------------
 # Transcode Logic
 # --------------------
-def transcode_dir(client, src_dir: Path):
-    did_work = False
+def transcode_dir(client, job: dict):
+    src_dir = Path(job["path"])
+    mode = job.get("mode", "series")
+    movie_name = job.get("movie_name")
 
-    for mkv in src_dir.rglob("*.mkv"):
-        rel = mkv.relative_to(SRC_BASE)
-        out = DST_BASE / rel
+    if not src_dir.exists():
+        logging.warning(f"job path does not exist: {src_dir}")
+        return
+
+    mkv_files = list(src_dir.rglob("*.mkv"))
+    if not mkv_files:
+        logging.info(f"no MKV files found in {src_dir}")
+        return
+
+    did_work = False
+    multi_movie_titles = mode == "movie" and len(mkv_files) > 1
+
+    for mkv in mkv_files:
+        if mode == "movie":
+            if movie_name and not multi_movie_titles:
+                out = MOVIE_DST_BASE / f"{movie_name}{mkv.suffix}"
+            else:
+                rel = mkv.relative_to(src_dir)
+                out = MOVIE_DST_BASE / rel
+        else:
+            rel = mkv.relative_to(SRC_BASE)
+            out = DST_BASE / rel
+
         out.parent.mkdir(parents=True, exist_ok=True)
 
         if out.exists():
@@ -99,7 +123,12 @@ def transcode_dir(client, src_dir: Path):
         mqtt_publish(
             client,
             MQTT_TOPIC_START,
-            {"file": str(mkv), "output": str(out), "ts": int(time.time())},
+            {
+                "version": MQTT_PAYLOAD_VERSION,
+                "file": str(mkv),
+                "output": str(out),
+                "ts": int(time.time()),
+            },
         )
 
         try:
@@ -140,14 +169,23 @@ def transcode_dir(client, src_dir: Path):
             mqtt_publish(
                 client,
                 MQTT_TOPIC_DONE,
-                {"file": str(out), "ts": int(time.time())},
+                {
+                    "version": MQTT_PAYLOAD_VERSION,
+                    "file": str(out),
+                    "ts": int(time.time()),
+                },
             )
 
         except Exception as e:
             mqtt_publish(
                 client,
                 MQTT_TOPIC_ERROR,
-                {"file": str(mkv), "error": str(e), "ts": int(time.time())},
+                {
+                    "version": MQTT_PAYLOAD_VERSION,
+                    "file": str(mkv),
+                    "error": str(e),
+                    "ts": int(time.time()),
+                },
             )
             raise
 
@@ -160,12 +198,14 @@ def transcode_dir(client, src_dir: Path):
 # --------------------
 def worker_loop(client: mqtt.Client, job_queue: queue.Queue):
     while True:
-        path = job_queue.get()
+        job = job_queue.get()
         try:
-            logging.info(f"processing queued job for {path}")
-            transcode_dir(client, path)
+            if isinstance(job, Path):
+                job = {"path": str(job), "mode": "series", "movie_name": None}
+            logging.info(f"processing queued job for {job.get('path')}")
+            transcode_dir(client, job)
         except Exception:
-            logging.exception(f"transcode error while handling {path}")
+            logging.exception(f"transcode error while handling {job.get('path')}")
         finally:
             job_queue.task_done()
 
@@ -181,18 +221,34 @@ def on_message(client, userdata, msg):
             logging.warning(f"ignoring MQTT message without path: {payload}")
             return
 
+        version = payload.get("version")
+        if version != MQTT_PAYLOAD_VERSION:
+            logging.warning(
+                f"unsupported payload version {version}, expected {MQTT_PAYLOAD_VERSION}"
+            )
+            return
+
         path = Path(payload["path"])
 
         if not path.exists():
             logging.warning(f"received path does not exist: {path}")
             return
 
-        logging.info(f"MQTT job received for {path}")
+        mode = payload.get("mode", "series")
+        movie_name = payload.get("movie_name")
+
+        logging.info(f"MQTT job received for {path} (mode={mode})")
         if userdata is None:
             logging.error("no job queue configured – cannot process message")
             return
 
-        userdata.put(path)
+        userdata.put(
+            {
+                "path": str(path),
+                "mode": mode,
+                "movie_name": movie_name,
+            }
+        )
 
     except json.JSONDecodeError:
         logging.warning("invalid JSON payload received")

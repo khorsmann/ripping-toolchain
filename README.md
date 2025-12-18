@@ -39,6 +39,7 @@ transcode_mqtt (FFmpeg) <--- MQTT subscription
   - Die Heuristik erlaubt eine minimale (`min_episode_minutes`) und optional maximale (`max_episode_minutes`) Laufzeit, sodass Komplett-Disc-Titel (z. B. „title 0“ mit allen Episoden) ignoriert werden können; mit `--movie-name <Titel>` lässt sich der Film-Modus aktivieren, bei dem nur die Mindestlaufzeit greift.
   - Im Film-Modus entfallen `--series`, `--season`, `--disc` und `--episode-start`; die Datei wird als `<base_raw>/<movie_path>/<Titel>.mkv` (inkl. Info-Datei) abgelegt – `movie_path` stammt aus der Storage-Config, `<Titel>` ist der übergebene (normalisierte) `--movie-name`.
   - Ruft `makemkvcon` (`info` und `mkv`) auf, benennt die erzeugten Dateien um und legt alles unter `/media/raw/dvd/<Serie>/S<Staffel>/<Disc>` ab.
+  - Publiziert `version = 1` in jedem `media/rip/done` Payload; transcode-MQTT lehnt andere Versionen strikt ab.
    - Wirft am Ende das Laufwerk aus und publiziert das oben genannte MQTT-Payload.
 
 2. **Transcode-Dienst**  
@@ -48,6 +49,8 @@ transcode_mqtt (FFmpeg) <--- MQTT subscription
      - Während `ffmpeg` läuft, hält ein Lock unter `/var/lock/vaapi.lock` andere Instanzen von der GPU fern.
      - Nach erfolgreichem Transcode wird `media/transcode/done` gesendet; Fehler landen auf `media/transcode/error`.
    - Idempotent: existiert die Zielfile bereits, wird sie übersprungen.
+   - Serien landen unter `DST_BASE` (z. B. `/media/Serien`), während Filme (`mode=movie`) automatisch nach `MOVIE_DST_BASE` (Standard: `/media/Filme`, überschreibbar) geschrieben werden.
+   - Alle Status-Payloads (`media/transcode/*`) enthalten ebenfalls `version = 1`, um Integrationen mit demselben Protokoll zu synchronisieren.
 
 
 ## Abhängigkeiten
@@ -72,6 +75,6 @@ transcode_mqtt (FFmpeg) <--- MQTT subscription
 
 ## Betriebshinweise
 
-- Beide Komponenten gehen davon aus, dass `SRC_BASE` und `DST_BASE` denselben Verzeichnisbaumstruktur aufweisen (Serie/Staffel/Disc). Änderungen an der Benennung müssen konsistent in beiden Configs geschehen.
+- Beide Komponenten gehen davon aus, dass `SRC_BASE` und `DST_BASE` denselben Verzeichnisbaumstruktur aufweisen (Serie/Staffel/Disc). Änderungen an der Benennung müssen konsistent in beiden Configs geschehen. Filme sind davon ausgenommen und landen gesammelt unter `MOVIE_DST_BASE`.
 - MQTT-Topics lassen sich über Environment-Variablen anpassen; Standard ist `media/rip/done` für Eingänge und `media/transcode/*` für Statusmeldungen.
 - Der komplette Workflow dient ausschließlich dazu, privat erworbene Medien für den Eigenbedarf zu digitalisieren. Rechte Dritter (DRM, Urheberrecht) sind zu beachten; eine Weitergabe oder öffentliche Bereitstellung gerippter/transkodierter Dateien ist nicht vorgesehen.
