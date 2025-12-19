@@ -24,6 +24,10 @@ def getenv(name, default=None, required=False):
     return val
 
 
+def getenv_bool(name, default="false"):
+    return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "on"}
+
+
 # --------------------
 # Logging
 # --------------------
@@ -46,6 +50,7 @@ MQTT_PORT = int(getenv("MQTT_PORT", "1883"))
 MQTT_USER = getenv("MQTT_USER", required=True)
 MQTT_PASSWORD = getenv("MQTT_PASSWORD", required=True)
 MQTT_TOPIC = getenv("MQTT_TOPIC", "media/rip/done")
+MQTT_SSL = getenv_bool("MQTT_SSL", "false")
 
 MQTT_TOPIC_START = getenv("MQTT_TOPIC_START", "media/transcode/start")
 MQTT_TOPIC_DONE = getenv("MQTT_TOPIC_DONE", "media/transcode/done")
@@ -85,6 +90,15 @@ def connect_mqtt(client: mqtt.Client):
             time.sleep(5)
 
 
+def build_mqtt_client() -> mqtt.Client:
+    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+    client.username_pw_set(MQTT_USER, MQTT_PASSWORD)
+    if MQTT_SSL:
+        client.tls_set()
+        logging.info("MQTT TLS enabled")
+    return client
+
+
 # --------------------
 # Transcode Logic
 # --------------------
@@ -116,7 +130,9 @@ def transcode_dir(client, job: dict):
             try:
                 rel = mkv.relative_to(SERIES_SRC_BASE)
             except ValueError:
-                logging.warning(f"{mkv} not under configured series base {SERIES_SRC_BASE}")
+                logging.warning(
+                    f"{mkv} not under configured series base {SERIES_SRC_BASE}"
+                )
                 continue
             out = SERIES_DST_BASE / rel
 
@@ -281,8 +297,7 @@ def main():
         MQTT_TOPIC,
     )
 
-    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
-    client.username_pw_set(MQTT_USER, MQTT_PASSWORD)
+    client = build_mqtt_client()
     job_queue = queue.Queue()
     client.user_data_set(job_queue)
     client.on_message = on_message

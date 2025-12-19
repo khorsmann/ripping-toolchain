@@ -64,6 +64,7 @@ def load_config(path: Path) -> dict:
     if max_minutes is not None:
         data["heuristics"]["max_episode_minutes"] = int(max_minutes)
     data["mqtt"]["port"] = int(data["mqtt"]["port"])
+    data["mqtt"]["ssl"] = bool(data["mqtt"].get("ssl", False))
 
     return data
 
@@ -180,6 +181,14 @@ def dvd_device_to_disc_target(device: str) -> str:
     return "disc:0"
 
 
+def mqtt_client(mqtt_config: dict) -> mqtt.Client:
+    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+    client.username_pw_set(mqtt_config["user"], mqtt_config["password"])
+    if mqtt_config.get("ssl"):
+        client.tls_set()
+    return client
+
+
 def mqtt_test_connection(mqtt_config: dict, timeout=5) -> bool:
     """
     Testet DNS + TCP + MQTT-Handshake.
@@ -187,15 +196,12 @@ def mqtt_test_connection(mqtt_config: dict, timeout=5) -> bool:
     """
     host = mqtt_config["host"]
     port = mqtt_config["port"]
-    user = mqtt_config["user"]
-    password = mqtt_config["password"]
 
     try:
         # DNS-Test (fängt "Name or service not known" früh ab)
         socket.gethostbyname(host)
 
-        client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
-        client.username_pw_set(user, password)
+        client = mqtt_client(mqtt_config)
         client.connect(host, port, timeout)
         client.disconnect()
         return True
@@ -211,13 +217,10 @@ def mqtt_publish(mqtt_config: dict, payload: dict):
     """
     host = mqtt_config["host"]
     port = mqtt_config["port"]
-    user = mqtt_config["user"]
-    password = mqtt_config["password"]
     topic = mqtt_config["topic"]
 
     try:
-        client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
-        client.username_pw_set(user, password)
+        client = mqtt_client(mqtt_config)
 
         client.connect(host, port, 10)
         client.publish(
@@ -363,7 +366,15 @@ def main():
 
             print(f"🎬 Ripping movie title {tid} → {movie_output}")
             run(
-                ["makemkvcon", "--noscan", "-r", "mkv", disc_target, str(tid), str(outdir)]
+                [
+                    "makemkvcon",
+                    "--noscan",
+                    "-r",
+                    "mkv",
+                    disc_target,
+                    str(tid),
+                    str(outdir),
+                ]
             )
 
             newest = newest_mkv(outdir)
