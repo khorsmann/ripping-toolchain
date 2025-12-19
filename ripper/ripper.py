@@ -153,6 +153,16 @@ def sanitize_movie_name(name: str) -> str:
     return safe or "movie"
 
 
+def newest_mkv(outdir: Path):
+    """
+    Liefert die neueste MKV-Datei in einem Verzeichnis oder None, falls keine existiert.
+    """
+    mkvs = list(outdir.glob("*.mkv"))
+    if not mkvs:
+        return None
+    return max(mkvs, key=lambda p: p.stat().st_mtime)
+
+
 def dvd_device_to_disc_target(device: str) -> str:
     """
     Mappt ein Linux-Gerät (/dev/sr0, /dev/sr1, …) auf das entsprechende
@@ -343,7 +353,9 @@ def main():
                 ["makemkvcon", "--noscan", "-r", "mkv", disc_target, str(tid), str(outdir)]
             )
 
-            newest = max(outdir.glob("*.mkv"), key=lambda p: p.stat().st_mtime)
+            newest = newest_mkv(outdir)
+            if newest is None:
+                raise RuntimeError("MakeMKV hat keine MKV-Datei erzeugt.")
             if newest != movie_output:
                 newest.rename(movie_output)
 
@@ -378,7 +390,9 @@ def main():
             # MakeMKV nennt die Datei meist anders (B1_t00.mkv).
             # Wir benennen nachträglich um:
             # finde die neueste MKV in outdir und verschiebe sie auf unseren Zielnamen.
-            newest = max(outdir.glob("*.mkv"), key=lambda p: p.stat().st_mtime)
+            newest = newest_mkv(outdir)
+            if newest is None:
+                raise RuntimeError("MakeMKV hat keine MKV-Datei erzeugt.")
             if newest != out_file:
                 newest.rename(out_file)
 
