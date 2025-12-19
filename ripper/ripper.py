@@ -46,7 +46,13 @@ def load_config(path: Path) -> dict:
         raise ValueError(f"Missing config sections: {', '.join(missing)}")
 
     data["storage"]["base_raw"] = Path(data["storage"]["base_raw"])
-    movie_path = data["storage"].get("movie_path", "Movies")
+    series_path = data["storage"].get("series_path", "Serien")
+    series_subpath = Path(series_path)
+    if series_subpath.is_absolute():
+        raise ValueError("storage.series_path must be a relative path")
+    data["storage"]["series_path"] = series_subpath
+
+    movie_path = data["storage"].get("movie_path", "Filme")
     movie_subpath = Path(movie_path)
     if movie_subpath.is_absolute():
         raise ValueError("storage.movie_path must be a relative path")
@@ -269,6 +275,7 @@ def main():
     device = config["dvd"]["device"]
     disc_target = dvd_device_to_disc_target(device)
     base_raw = config["storage"]["base_raw"]
+    series_subpath = config["storage"]["series_path"]
     movie_subpath = config["storage"]["movie_path"]
     min_episode_minutes = config["heuristics"]["min_episode_minutes"]
     max_episode_minutes = (
@@ -288,7 +295,7 @@ def main():
         info_file = outdir / f"{movie_name}.info"
         movie_output = outdir / f"{movie_name}.mkv"
     else:
-        outdir = base_raw / args.series / f"S{args.season}" / args.disc
+        outdir = base_raw / series_subpath / args.series / f"S{args.season}" / args.disc
         info_file = outdir / f"{args.disc}.info"
     outdir.mkdir(parents=True, exist_ok=True)
 

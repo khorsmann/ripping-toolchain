@@ -58,6 +58,12 @@ MQTT_PAYLOAD_VERSION = 1
 # --------------------
 SRC_BASE = Path(getenv("SRC_BASE", required=True))
 DST_BASE = Path(getenv("DST_BASE", required=True))
+
+SERIES_SUBPATH = Path(getenv("SERIES_SUBPATH", "Serien"))
+if SERIES_SUBPATH.is_absolute():
+    raise RuntimeError("SERIES_SUBPATH must be relative")
+SERIES_SRC_BASE = SRC_BASE / SERIES_SUBPATH
+SERIES_DST_BASE = Path(getenv("SERIES_DST_BASE", str(DST_BASE)))
 MOVIE_DST_BASE = Path(getenv("MOVIE_DST_BASE", str(DST_BASE)))
 
 
@@ -108,8 +114,12 @@ def transcode_dir(client, job: dict):
                 rel = mkv.relative_to(src_dir)
                 out = MOVIE_DST_BASE / rel
         else:
-            rel = mkv.relative_to(SRC_BASE)
-            out = DST_BASE / rel
+            try:
+                rel = mkv.relative_to(SERIES_SRC_BASE)
+            except ValueError:
+                logging.warning(f"{mkv} not under configured series base {SERIES_SRC_BASE}")
+                continue
+            out = SERIES_DST_BASE / rel
 
         out.parent.mkdir(parents=True, exist_ok=True)
 
@@ -263,7 +273,14 @@ def on_message(client, userdata, msg):
 def main():
     logging.info("transcode-mqtt starting up")
     logging.info(
-        f"config: SRC_BASE={SRC_BASE}, DST_BASE={DST_BASE}, MQTT_TOPIC={MQTT_TOPIC}"
+        "config: SRC_BASE=%s (series subpath=%s), DST_BASE=%s, SERIES_DST_BASE=%s, "
+        "MOVIE_DST_BASE=%s, MQTT_TOPIC=%s",
+        SRC_BASE,
+        SERIES_SUBPATH,
+        DST_BASE,
+        SERIES_DST_BASE,
+        MOVIE_DST_BASE,
+        MQTT_TOPIC,
     )
 
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)

@@ -13,6 +13,7 @@ device = "/dev/sr0"
 
 [storage]
 base_raw = "/path/to/raw/dvd/output"
+series_path = "Serien"
 movie_path = "Movies"
 
 [heuristics]
