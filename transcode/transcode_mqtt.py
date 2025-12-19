@@ -57,14 +57,13 @@ MQTT_PAYLOAD_VERSION = 1
 # Paths (ENV)
 # --------------------
 SRC_BASE = Path(getenv("SRC_BASE", required=True))
-DST_BASE = Path(getenv("DST_BASE", required=True))
 
 SERIES_SUBPATH = Path(getenv("SERIES_SUBPATH", "Serien"))
 if SERIES_SUBPATH.is_absolute():
     raise RuntimeError("SERIES_SUBPATH must be relative")
 SERIES_SRC_BASE = SRC_BASE / SERIES_SUBPATH
-SERIES_DST_BASE = Path(getenv("SERIES_DST_BASE", str(DST_BASE)))
-MOVIE_DST_BASE = Path(getenv("MOVIE_DST_BASE", str(DST_BASE)))
+SERIES_DST_BASE = Path(getenv("SERIES_DST_BASE", "/media/Serien"))
+MOVIE_DST_BASE = Path(getenv("MOVIE_DST_BASE", "/media/Filme"))
 
 
 # --------------------
@@ -273,11 +272,10 @@ def on_message(client, userdata, msg):
 def main():
     logging.info("transcode-mqtt starting up")
     logging.info(
-        "config: SRC_BASE=%s (series subpath=%s), DST_BASE=%s, SERIES_DST_BASE=%s, "
-        "MOVIE_DST_BASE=%s, MQTT_TOPIC=%s",
+        "config: SRC_BASE=%s (series subpath=%s), SERIES_DST_BASE=%s, MOVIE_DST_BASE=%s, "
+        "MQTT_TOPIC=%s",
         SRC_BASE,
         SERIES_SUBPATH,
-        DST_BASE,
         SERIES_DST_BASE,
         MOVIE_DST_BASE,
         MQTT_TOPIC,
