@@ -264,9 +264,13 @@ def main():
         "--movie-name",
         help="Aktiviert den Film-Modus und legt den Dateinamen fest, z.B. 2001_ODYSSEE_IM_WELTRAUM",
     )
+    ap.add_argument(
+        "--iso", help="ISO-Datei als Quelle verwenden (statt physischem Laufwerk)"
+    )
 
     args = ap.parse_args()
     movie_mode = bool(args.movie_name and args.movie_name.strip())
+    iso_mode = bool(args.iso)
 
     if not movie_mode:
         required_fields = ("series", "season", "disc", "episode_start")
@@ -283,7 +287,16 @@ def main():
     config = load_config(Path(args.config))
     mqtt_config = config["mqtt"]
     device = config["dvd"]["device"]
-    disc_target = dvd_device_to_disc_target(device)
+
+    if iso_mode:
+        iso_path = Path(args.iso).expanduser()
+        if not iso_path.is_file():
+            ap.error(f"ISO-Datei nicht gefunden: {iso_path}")
+        disc_target = f"file:{iso_path}"
+        source_label = iso_path
+    else:
+        disc_target = dvd_device_to_disc_target(device)
+        source_label = disc_target
     base_raw = config["storage"]["base_raw"]
     series_subpath = config["storage"]["series_path"]
     movie_subpath = config["storage"]["movie_path"]
@@ -309,7 +322,7 @@ def main():
         info_file = outdir / f"{args.disc}.info"
     outdir.mkdir(parents=True, exist_ok=True)
 
-    print(f"📀 Analyzing disc via {disc_target}…")
+    print(f"📀 Analyzing source via {source_label}…")
     info_text = run(["makemkvcon", "--noscan", "-r", "info", disc_target])
     info_file.write_text(info_text)
 
@@ -421,8 +434,9 @@ def main():
         payload["season"] = args.season
         payload["disc"] = args.disc
 
-    print("⏏ Ejecting disc…")
-    subprocess.run(["eject", device], check=False)
+    if not iso_mode:
+        print("⏏ Ejecting disc…")
+        subprocess.run(["eject", device], check=False)
 
     print("📡 Publishing MQTT event…")
     mqtt_publish(mqtt_config, payload)
