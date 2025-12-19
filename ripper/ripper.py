@@ -182,7 +182,14 @@ def dvd_device_to_disc_target(device: str) -> str:
 
 
 def mqtt_client(mqtt_config: dict) -> mqtt.Client:
-    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+    # Arch Linux ships paho-mqtt 1.x which lacks CallbackAPIVersion;
+    # only pass it when available to stay compatible with both 1.x and 2.x.
+    kwargs = {}
+    callback_version = getattr(mqtt, "CallbackAPIVersion", None)
+    if callback_version:
+        kwargs["callback_api_version"] = callback_version.VERSION2
+
+    client = mqtt.Client(**kwargs)
     client.username_pw_set(mqtt_config["user"], mqtt_config["password"])
     if mqtt_config.get("ssl"):
         client.tls_set()
