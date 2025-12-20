@@ -363,6 +363,16 @@ def main():
     for t in usable:
         print(f"   - title {t['title_id']}: {t['minutes']} min ({t['duration']})")
 
+    usable_ids = {t["title_id"] for t in usable}
+    ignored = [t for t in titles if t["title_id"] not in usable_ids]
+    if ignored:
+        print("▶ Folgende Titel werden ignoriert (min/max length):")
+        for t in ignored:
+            print(f"   - title {t['title_id']}: {t['minutes']} min ({t['duration']})")
+
+    print("⏳ Warte 5 Sekunden – STRG+C zum Abbrechen…")
+    time.sleep(5)
+
     if movie_mode:
         if movie_output.exists():
             print(f"⏭ {movie_output.name} existiert bereits, überspringe Ripping")
