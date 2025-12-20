@@ -370,8 +370,8 @@ def main():
         for t in ignored:
             print(f"   - title {t['title_id']}: {t['minutes']} min ({t['duration']})")
 
-    print("⏳ Warte 5 Sekunden – STRG+C zum Abbrechen…")
-    time.sleep(5)
+    print("⏳ Warte 2 Sekunden – STRG+C zum Abbrechen…")
+    time.sleep(2)
 
     if movie_mode:
         if movie_output.exists():
