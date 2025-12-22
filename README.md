@@ -22,6 +22,7 @@ transcode_mqtt (FFmpeg) <--- MQTT subscription
 - **ripper/ripper.py** analysiert eine eingelegte DVD via MakeMKV CLI, wählt anhand einer Kapitel-Dauer-Heuristik geeignete Episoden aus, rippt sie nach `base_raw` und veröffentlicht anschließend ein MQTT-Event (`media/rip/done`), das Pfad, Serie, Staffel, Disc usw. enthält.
 - **transcode/transcode_mqtt.py** läuft als Dienst, abonniert das MQTT-Topic `media/rip/done`, queued jedes empfangene Path-Event und transkodiert alle darin enthaltenen `.mkv` Dateien nach `SERIES_DST_BASE` (standardmäßig `/media/Serien`) bzw. `MOVIE_DST_BASE` via `ffmpeg` + VAAPI-Hardwarebeschleunigung. Fortschritt und Fehler werden auf `media/transcode/start`, `media/transcode/done` bzw. `media/transcode/error` zurückgemeldet.
 - Optionale Integrationen (z. B. Home Assistant) können sowohl auf rip- als auch transcode-Topics reagieren, siehe `misc/homeassistant/`.
+- **transcode/rescan.py** prüft den Roh-Baum (`SRC_BASE`) gegen die Ziele (`SERIES_DST_BASE`/`MOVIE_DST_BASE`) und sendet MQTT-Jobs für alle Quell-Dirs, in denen transkodierte MKVs fehlen; `--dry-run` zeigt nur an, was gesendet würde. Lädt optional das gleiche Env-File wie der Dienst (`--env-file`, Default `/etc/transcode-mqtt.env`).
 
 
 ## Komponenten & Zusammenspiel
@@ -51,6 +52,7 @@ transcode_mqtt (FFmpeg) <--- MQTT subscription
    - Idempotent: existiert die Zielfile bereits, wird sie übersprungen.
    - Serien landen unter `SERIES_DST_BASE` (Default `/media/Serien`) und spiegeln die Struktur unter `SRC_BASE/<SERIES_SUBPATH>` (Standard `Serien`). Filme (`mode=movie`) werden nach `MOVIE_DST_BASE` (Default `/media/Filme`, überschreibbar) abgelegt.
    - Alle Status-Payloads (`media/transcode/*`) enthalten ebenfalls `version = 1`, um Integrationen mit demselben Protokoll zu synchronisieren.
+   - Fehlt nachträglich eine transkodierte Datei, kann `transcode/rescan.py` den Raw-Baum erneut scannen und MQTT-Jobs für die fehlenden Ziele senden (`--dry-run` zum Prüfen).
 
 
 ## Abhängigkeiten
