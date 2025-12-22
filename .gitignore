@@ -1,4 +1,6 @@
 test/*
+ripper2/*
+ripper/ripper.toml
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
