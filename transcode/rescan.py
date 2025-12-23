@@ -15,14 +15,16 @@ import argparse
 import json
 import logging
 import os
+import re
 import sys
 import time
 from pathlib import Path
-from typing import Dict, List, Set
+from typing import Dict, List, Tuple
 
 import paho.mqtt.client as mqtt  # type: ignore
 
-MQTT_PAYLOAD_VERSION = 1
+MQTT_PAYLOAD_VERSION = 2
+TEMP_MKV_RE = re.compile(r"^[A-Za-z0-9]{2}_[A-Za-z][0-9]{2}\\.mkv$")
 
 
 # --------------------
@@ -37,6 +39,10 @@ def getenv(name, default=None, required=False):
 
 def getenv_bool(name, default="false"):
     return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def is_temp_mkv(path: Path) -> bool:
+    return bool(TEMP_MKV_RE.match(path.name))
 
 
 def build_mqtt_client() -> mqtt.Client:
@@ -101,49 +107,61 @@ def load_env_file(path: Path):
             os.environ[key] = value.strip()
 
 
-def collect_missing_series_dirs(src_base: Path, dst_base: Path) -> Set[Path]:
+def collect_missing_series_dirs(
+    src_base: Path, dst_base: Path
+) -> Tuple[Dict[Path, List[Path]], List[Path]]:
     """
-    Liefert alle Quell-Directories, in denen mindestens eine MKV noch nicht
-    am Ziel liegt.
+    Liefert {directory: [missing mkv files]} und eine Liste übersprungener Temp-MKVs.
     """
-    missing: Set[Path] = set()
+    missing: Dict[Path, List[Path]] = {}
+    skipped: List[Path] = []
 
     if not src_base.exists():
         logging.warning("series source base does not exist: %s", src_base)
-        return missing
+        return missing, skipped
 
     for mkv in src_base.rglob("*.mkv"):
+        if is_temp_mkv(mkv):
+            skipped.append(mkv)
+            continue
         rel = mkv.relative_to(src_base)
         dest = dst_base / rel
         if not dest.exists():
-            missing.add(mkv.parent)
+            missing.setdefault(mkv.parent, []).append(mkv)
 
-    return missing
+    return missing, skipped
 
 
 def collect_missing_movie_dirs(
     movie_src_base: Path, movie_dst_base: Path
-) -> Dict[Path, List[Path]]:
+) -> Tuple[Dict[Path, List[Path]], List[Path]]:
     """
-    Liefert {directory: [mkv files]} für Movie-MKVs, deren Ziel fehlt.
+    Liefert {directory: [mkv files]} für Movie-MKVs, deren Ziel fehlt,
+    plus Liste übersprungener Temp-MKVs.
     """
     missing: Dict[Path, List[Path]] = {}
+    skipped: List[Path] = []
 
     if not movie_src_base.exists():
         logging.info("movie source base does not exist, skipping: %s", movie_src_base)
-        return missing
+        return missing, skipped
 
     for mkv in movie_src_base.rglob("*.mkv"):
+        if is_temp_mkv(mkv):
+            skipped.append(mkv)
+            continue
         rel = mkv.relative_to(movie_src_base)
         dest = movie_dst_base / rel
         if dest.exists():
             continue
         missing.setdefault(mkv.parent, []).append(mkv)
 
-    return missing
+    return missing, skipped
 
 
-def build_movie_name(mkvs: List[Path], parent: Path, movie_src_base: Path) -> str | None:
+def build_movie_name(
+    mkvs: List[Path], parent: Path, movie_src_base: Path
+) -> str | None:
     """
     Versucht einen movie_name zu bestimmen, falls genau eine Datei in der
     Quell-Directory liegt und diese direkt unter movie_src_base abgelegt ist.
@@ -187,19 +205,23 @@ def main():
     MQTT_TOPIC = getenv("MQTT_TOPIC", "media/rip/done")
     MQTT_SSL = getenv_bool("MQTT_SSL", "false")
 
-    src_base = Path(getenv("SRC_BASE", required=True))
+    src_base = Path(getenv("SRC_BASE", required=True)).expanduser().resolve()
 
     series_subpath = Path(getenv("SERIES_SUBPATH", "Serien"))
     if series_subpath.is_absolute():
         raise RuntimeError("SERIES_SUBPATH must be relative")
-    series_src_base = src_base / series_subpath
-    series_dst_base = Path(getenv("SERIES_DST_BASE", "/media/Serien"))
+    series_src_base = (src_base / series_subpath).resolve()
+    series_dst_base = (
+        Path(getenv("SERIES_DST_BASE", "/media/Serien")).expanduser().resolve()
+    )
 
     movie_subpath = Path(getenv("MOVIE_SUBPATH", "Filme"))
     if movie_subpath.is_absolute():
         raise RuntimeError("MOVIE_SUBPATH must be relative")
-    movie_src_base = src_base / movie_subpath
-    movie_dst_base = Path(getenv("MOVIE_DST_BASE", "/media/Filme"))
+    movie_src_base = (src_base / movie_subpath).resolve()
+    movie_dst_base = (
+        Path(getenv("MOVIE_DST_BASE", "/media/Filme")).expanduser().resolve()
+    )
 
     logging.info(
         "config: MQTT_TOPIC=%s, SRC_BASE=%s (series subpath=%s, movie subpath=%s), "
@@ -212,11 +234,20 @@ def main():
         movie_dst_base,
     )
 
-    series_dirs = collect_missing_series_dirs(series_src_base, series_dst_base)
-    movie_dirs = collect_missing_movie_dirs(movie_src_base, movie_dst_base)
+    series_dirs, series_skipped = collect_missing_series_dirs(
+        series_src_base, series_dst_base
+    )
+    movie_dirs, movie_skipped = collect_missing_movie_dirs(
+        movie_src_base, movie_dst_base
+    )
 
     if not series_dirs and not movie_dirs:
         logging.info("no missing transcodes detected")
+        if series_skipped or movie_skipped:
+            logging.info(
+                "skipped temp files: %s",
+                ", ".join(str(p) for p in sorted(series_skipped + movie_skipped)),
+            )
         return
 
     logging.info(
@@ -225,14 +256,20 @@ def main():
         len(movie_dirs),
     )
 
+    if series_skipped or movie_skipped:
+        logging.info(
+            "skipped temp files: %s",
+            ", ".join(str(p) for p in sorted(series_skipped + movie_skipped)),
+        )
+
     client = build_mqtt_client()
     connect_mqtt(client)
 
-    for src_dir in sorted(series_dirs):
+    for src_dir, mkvs in sorted(series_dirs.items()):
         payload = {
             "version": MQTT_PAYLOAD_VERSION,
-            "path": str(src_dir),
             "mode": "series",
+            "files": [str(p.resolve()) for p in mkvs],
         }
         mqtt_publish(client, MQTT_TOPIC, payload, args.dry_run)
 
@@ -240,8 +277,8 @@ def main():
         movie_name = build_movie_name(mkvs, parent, movie_src_base)
         payload = {
             "version": MQTT_PAYLOAD_VERSION,
-            "path": str(parent),
             "mode": "movie",
+            "files": [str(p.resolve()) for p in mkvs],
         }
         if movie_name:
             payload["movie_name"] = movie_name

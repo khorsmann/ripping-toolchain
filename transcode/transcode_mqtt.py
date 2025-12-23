@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 
-from pathlib import Path
 import fcntl
 import json
 import logging
 import os
 import queue
+import re
 import subprocess
 import sys
 import threading
 import time
+from pathlib import Path
 
 import paho.mqtt.client as mqtt  # type: ignore
 
@@ -26,6 +27,10 @@ def getenv(name, default=None, required=False):
 
 def getenv_bool(name, default="false"):
     return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def is_temp_mkv(path: Path) -> bool:
+    return bool(re.match(r"^[A-Za-z0-9]{2}_[A-Za-z][0-9]{2}\\.mkv$", path.name))
 
 
 # --------------------
@@ -55,20 +60,22 @@ MQTT_SSL = getenv_bool("MQTT_SSL", "false")
 MQTT_TOPIC_START = getenv("MQTT_TOPIC_START", "media/transcode/start")
 MQTT_TOPIC_DONE = getenv("MQTT_TOPIC_DONE", "media/transcode/done")
 MQTT_TOPIC_ERROR = getenv("MQTT_TOPIC_ERROR", "media/transcode/error")
-MQTT_PAYLOAD_VERSION = 1
+MQTT_PAYLOAD_VERSION = 2
 
 
 # --------------------
 # Paths (ENV)
 # --------------------
-SRC_BASE = Path(getenv("SRC_BASE", required=True))
+SRC_BASE = Path(getenv("SRC_BASE", required=True)).expanduser().resolve()
 
 SERIES_SUBPATH = Path(getenv("SERIES_SUBPATH", "Serien"))
 if SERIES_SUBPATH.is_absolute():
     raise RuntimeError("SERIES_SUBPATH must be relative")
-SERIES_SRC_BASE = SRC_BASE / SERIES_SUBPATH
-SERIES_DST_BASE = Path(getenv("SERIES_DST_BASE", "/media/Serien"))
-MOVIE_DST_BASE = Path(getenv("MOVIE_DST_BASE", "/media/Filme"))
+SERIES_SRC_BASE = (SRC_BASE / SERIES_SUBPATH).resolve()
+SERIES_DST_BASE = (
+    Path(getenv("SERIES_DST_BASE", "/media/Serien")).expanduser().resolve()
+)
+MOVIE_DST_BASE = Path(getenv("MOVIE_DST_BASE", "/media/Filme")).expanduser().resolve()
 
 
 # --------------------
@@ -103,17 +110,51 @@ def build_mqtt_client() -> mqtt.Client:
 # Transcode Logic
 # --------------------
 def transcode_dir(client, job: dict):
-    src_dir = Path(job["path"])
+    job_path_raw = job.get("path")
+    src_dir = Path(job_path_raw).resolve() if job_path_raw else None
     mode = job.get("mode", "series")
     movie_name = job.get("movie_name")
+    raw_files = job.get("files") or []
+    explicit_files = [Path(p).expanduser().resolve() for p in raw_files]
 
-    if not src_dir.exists():
+    if src_dir and not src_dir.exists():
         logging.warning(f"job path does not exist: {src_dir}")
         return
 
-    mkv_files = list(src_dir.rglob("*.mkv"))
+    src_root = None
+    if src_dir:
+        src_root = src_dir if src_dir.is_dir() else src_dir.parent
+    elif explicit_files:
+        try:
+            src_root = Path(os.path.commonpath(explicit_files))
+        except Exception:
+            src_root = None
+
+    mkv_files = []
+
+    if explicit_files:
+        for mkv in explicit_files:
+            if not mkv.exists():
+                logging.warning("skip missing file from job: %s", mkv)
+                continue
+            if is_temp_mkv(mkv):
+                logging.info("skip temp mkv from job: %s", mkv)
+                continue
+            mkv_files.append(mkv)
+    elif src_dir:
+        if src_dir.is_file():
+            if src_dir.suffix.lower() == ".mkv":
+                mkv_files.append(src_dir)
+            else:
+                logging.warning("job path is a file but not an MKV: %s", src_dir)
+        else:
+            mkv_files = [p for p in src_dir.rglob("*.mkv") if not is_temp_mkv(p)]
+    else:
+        logging.warning("job without path or files, skipping")
+        return
+
     if not mkv_files:
-        logging.info(f"no MKV files found in {src_dir}")
+        logging.info(f"no MKV files found in {src_dir or 'job list'}")
         return
 
     did_work = False
@@ -124,16 +165,30 @@ def transcode_dir(client, job: dict):
             if movie_name and not multi_movie_titles:
                 out = MOVIE_DST_BASE / f"{movie_name}{mkv.suffix}"
             else:
-                rel = mkv.relative_to(src_dir)
+                rel = None
+                if src_root:
+                    try:
+                        rel = mkv.relative_to(src_root)
+                    except ValueError:
+                        rel = None
+                if rel is None:
+                    rel = mkv.name
                 out = MOVIE_DST_BASE / rel
         else:
             try:
                 rel = mkv.relative_to(SERIES_SRC_BASE)
             except ValueError:
-                logging.warning(
-                    f"{mkv} not under configured series base {SERIES_SRC_BASE}"
-                )
-                continue
+                rel = None
+                if src_root:
+                    try:
+                        rel = mkv.relative_to(src_root)
+                    except ValueError:
+                        rel = None
+                if rel is None:
+                    logging.warning(
+                        f"{mkv} not under configured series base {SERIES_SRC_BASE}"
+                    )
+                    continue
             out = SERIES_DST_BASE / rel
 
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -226,7 +281,7 @@ def worker_loop(client: mqtt.Client, job_queue: queue.Queue):
         job = job_queue.get()
         try:
             if isinstance(job, Path):
-                job = {"path": str(job), "mode": "series", "movie_name": None}
+                job = {"path": str(job.resolve()), "mode": "series", "movie_name": None}
             logging.info(f"processing queued job for {job.get('path')}")
             transcode_dir(client, job)
         except Exception:
@@ -242,10 +297,6 @@ def on_message(client, userdata, msg):
     try:
         payload = json.loads(msg.payload.decode())
 
-        if "path" not in payload:
-            logging.warning(f"ignoring MQTT message without path: {payload}")
-            return
-
         version = payload.get("version")
         if version != MQTT_PAYLOAD_VERSION:
             logging.warning(
@@ -253,25 +304,39 @@ def on_message(client, userdata, msg):
             )
             return
 
-        path = Path(payload["path"])
+        path = None
+        if "path" in payload:
+            path = Path(payload["path"]).expanduser().resolve()
+            if not path.exists():
+                logging.warning(f"received path does not exist: {path}")
+                path = None
 
-        if not path.exists():
-            logging.warning(f"received path does not exist: {path}")
+        files_raw = payload.get("files")
+        files = []
+        if not isinstance(files_raw, list) or not files_raw:
+            logging.warning("v2 payload requires non-empty 'files' list, skipping")
             return
+        files = [str(Path(file_path).expanduser().resolve()) for file_path in files_raw]
 
         mode = payload.get("mode", "series")
         movie_name = payload.get("movie_name")
 
-        logging.info(f"MQTT job received for {path} (mode={mode})")
+        logging.info(
+            "MQTT job received (mode=%s, path=%s, files=%d)",
+            mode,
+            path,
+            len(files),
+        )
         if userdata is None:
             logging.error("no job queue configured – cannot process message")
             return
 
         userdata.put(
             {
-                "path": str(path),
+                "path": str(path) if path else None,
                 "mode": mode,
                 "movie_name": movie_name,
+                "files": files,
             }
         )
 

@@ -6,7 +6,6 @@ DVD-Ripper für MakeMKV (CLI) + MQTT-Trigger
 - Rippt alle passenden Titel mit MakeMKV
 - Sendet am Ende eine MQTT-Nachricht
 """
-from pathlib import Path
 import argparse
 import json
 import re
@@ -14,10 +13,11 @@ import socket
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 import paho.mqtt.client as mqtt
 
-MQTT_PAYLOAD_VERSION = 1
+MQTT_PAYLOAD_VERSION = 2
 try:  # Python 3.11+ ships tomllib, tomli is fallback for older versions
     import tomllib
 except ModuleNotFoundError:  # pragma: no cover - tomli only if tomllib missing
@@ -307,7 +307,7 @@ def main():
     else:
         disc_target = dvd_device_to_disc_target(device)
         source_label = disc_target
-    base_raw = config["storage"]["base_raw"]
+    base_raw = config["storage"]["base_raw"].expanduser().resolve()
     series_subpath = config["storage"]["series_path"]
     movie_subpath = config["storage"]["movie_path"]
     min_episode_minutes = config["heuristics"]["min_episode_minutes"]
@@ -324,13 +324,16 @@ def main():
     if movie_mode:
         movie_name_raw = args.movie_name.strip()
         movie_name = sanitize_movie_name(movie_name_raw)
-        outdir = base_raw / movie_subpath
+        outdir = (base_raw / movie_subpath).resolve()
         info_file = outdir / f"{movie_name}.info"
         movie_output = outdir / f"{movie_name}.mkv"
     else:
-        outdir = base_raw / series_subpath / args.series / f"S{args.season}" / args.disc
+        outdir = (
+            base_raw / series_subpath / args.series / f"S{args.season}" / args.disc
+        ).resolve()
         info_file = outdir / f"{args.disc}.info"
     outdir.mkdir(parents=True, exist_ok=True)
+    payload_files = []
 
     print(f"📀 Analyzing source via {source_label}…")
     info_text = run(["makemkvcon", "--noscan", "-r", "info", disc_target])
@@ -401,6 +404,7 @@ def main():
                 newest.rename(movie_output)
 
             episodes_ripped = 1
+        payload_files.append(movie_output)
 
     else:
         episode = args.episode_start
@@ -409,6 +413,7 @@ def main():
             tid = t["title_id"]
             filename = f"{args.series}-S{args.season}E{episode:02d}.mkv"
             out_file = outdir / filename
+            payload_files.append(out_file)
 
             if out_file.exists():
                 print(f"⏭ Datei existiert bereits, überspringe: {out_file}")
@@ -444,12 +449,12 @@ def main():
     hostname = socket.gethostname().split(".")[0]
 
     payload = {
-        "path": str(outdir),
         "episodes": episodes_ripped,
         "hostname": hostname,
         "timestamp": int(time.time()),
         "mode": "movie" if movie_mode else "series",
         "version": MQTT_PAYLOAD_VERSION,
+        "files": [str(p.resolve()) for p in payload_files],
     }
 
     if movie_mode:
