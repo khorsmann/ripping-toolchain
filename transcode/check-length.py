@@ -131,6 +131,11 @@ def main() -> int:
         default=500,
         help="alle N Einträge einen Fortschritts-Log ausgeben (0=aus)",
     )
+    parser.add_argument(
+        "--show-missing",
+        action="store_true",
+        help="fehlende Quellen/Ziele ausgeben (standard: unterdrückt)",
+    )
     args = parser.parse_args()
 
     load_env_file(Path(args.env_file))
@@ -189,15 +194,16 @@ def main() -> int:
             mismatches.append((kind, rel, src, dst, s_dur, d_dur, tol))
 
     print(f"Entries checked: {len(pairs)}")
-    if missing_dst:
-        print(f"\nMissing outputs ({len(missing_dst)}):")
-        for kind, rel, src in missing_dst:
-            print(f"  [{kind}] {src} -> (missing dest)")
-    if missing_src:
-        print(f"\nMissing sources ({len(missing_src)}):")
-        for kind, rel, dst, d_dur in missing_src:
-            dur_txt = f"{d_dur:.2f}s" if d_dur is not None else "n/a"
-            print(f"  [{kind}] (missing src) -> {dst} (dur {dur_txt})")
+    if args.show_missing:
+        if missing_dst:
+            print(f"\nMissing outputs ({len(missing_dst)}):")
+            for kind, rel, src in missing_dst:
+                print(f"  [{kind}] {src} -> (missing dest)")
+        if missing_src:
+            print(f"\nMissing sources ({len(missing_src)}):")
+            for kind, rel, dst, d_dur in missing_src:
+                dur_txt = f"{d_dur:.2f}s" if d_dur is not None else "n/a"
+                print(f"  [{kind}] (missing src) -> {dst} (dur {dur_txt})")
     if probe_errors:
         print(f"\nProbe errors ({len(probe_errors)}):")
         for kind, rel, src, dst, s_dur, d_dur in probe_errors:
