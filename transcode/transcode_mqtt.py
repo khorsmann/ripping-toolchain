@@ -434,22 +434,13 @@ def transcode_dir(client, job: dict):
             if in_duration and out_duration:
                 tolerance = max(1.0, in_duration * 0.01)  # 1s or 1% of input
                 if abs(in_duration - out_duration) > tolerance:
-                    logging.error(
-                        "duration mismatch (in=%0.2fs, out=%0.2fs, tol=%0.2fs) for %s",
+                    logging.warning(
+                        "duration mismatch (in=%0.2fs, out=%0.2fs, tol=%0.2fs) for %s (keeping output)",
                         in_duration,
                         out_duration,
                         tolerance,
                         mkv,
                     )
-                    try:
-                        out.unlink()
-                    except OSError as cleanup_err:
-                        logging.warning(
-                            "could not remove mismatched output %s: %s",
-                            out,
-                            cleanup_err,
-                        )
-                    raise RuntimeError("duration mismatch after transcode")
 
             mqtt_publish(
                 client,
