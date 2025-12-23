@@ -396,9 +396,21 @@ def transcode_dir(client, job: dict):
 
             if hw_failed:
                 if not ENABLE_SW_FALLBACK:
-                    raise RuntimeError(
-                        "hardware transcode failed after retries (SW fallback disabled)"
+                    logging.error(
+                        "hardware transcode failed after retries (SW fallback disabled) for %s",
+                        mkv,
                     )
+                    mqtt_publish(
+                        client,
+                        MQTT_TOPIC_ERROR,
+                        {
+                            "version": MQTT_PAYLOAD_VERSION,
+                            "file": str(mkv),
+                            "error": "hardware transcode failed (SW fallback disabled)",
+                            "ts": int(time.time()),
+                        },
+                    )
+                    continue
 
                 if out.exists():
                     try:
