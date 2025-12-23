@@ -312,6 +312,39 @@ def transcode_dir(client, job: dict):
             str(out),
         ]
 
+        retry_cmd = [
+            "ffmpeg",
+            "-vaapi_device",
+            "/dev/dri/renderD128",
+            "-hwaccel",
+            "vaapi",
+            "-hwaccel_output_format",
+            "vaapi",
+            "-vf",
+            vf_filter,
+            "-fflags",
+            "+genpts",
+            "-avoid_negative_ts",
+            "make_zero",
+            "-i",
+            str(mkv),
+            "-map",
+            "0:v:0",
+            "-map",
+            "0:a",
+            "-map",
+            "0:s?",
+            "-c:v",
+            "hevc_vaapi",
+            "-qp",
+            "22",
+            "-c:a",
+            "copy",
+            "-c:s",
+            "copy",
+            str(out),
+        ]
+
         try:
             hw_failed = False
 
@@ -319,68 +352,46 @@ def transcode_dir(client, job: dict):
                 logging.info("waiting for GPU lock…")
                 fcntl.flock(lock, fcntl.LOCK_EX)
 
-                try:
-                    subprocess.run(base_cmd, check=True)
-                except CalledProcessError as e:
-                    logging.warning(
-                        "ffmpeg failed (rc=%s) for %s -> %s; retrying with timestamp repair flags",
-                        e.returncode,
-                        mkv,
-                        out,
+                max_hw_retries = 5  # retries after initial attempt
+                for attempt in range(0, max_hw_retries + 1):
+                    cmd = base_cmd if attempt == 0 else retry_cmd
+                    label = (
+                        "initial"
+                        if attempt == 0
+                        else f"retry {attempt}/{max_hw_retries}"
                     )
-                    if out.exists():
-                        try:
-                            out.unlink()
-                        except OSError as cleanup_err:
-                            logging.warning(
-                                "could not remove incomplete output %s: %s",
-                                out,
-                                cleanup_err,
-                            )
-
-                    retry_cmd = [
-                        "ffmpeg",
-                        "-vaapi_device",
-                        "/dev/dri/renderD128",
-                        "-hwaccel",
-                        "vaapi",
-                        "-hwaccel_output_format",
-                        "vaapi",
-                        "-vf",
-                        vf_filter,
-                        "-fflags",
-                        "+genpts",
-                        "-avoid_negative_ts",
-                        "make_zero",
-                        "-i",
-                        str(mkv),
-                        "-map",
-                        "0:v:0",
-                        "-map",
-                        "0:a",
-                        "-map",
-                        "0:s?",
-                        "-c:v",
-                        "hevc_vaapi",
-                        "-qp",
-                        "22",
-                        "-c:a",
-                        "copy",
-                        "-c:s",
-                        "copy",
-                        str(out),
-                    ]
-
                     try:
-                        subprocess.run(retry_cmd, check=True)
-                    except CalledProcessError as retry_err:
-                        logging.warning(
-                            "retry with timestamp repair failed (rc=%s) for %s -> %s; will fall back to software transcode",
-                            retry_err.returncode,
-                            mkv,
-                            out,
-                        )
-                        hw_failed = True
+                        subprocess.run(cmd, check=True)
+                        hw_failed = False
+                        break
+                    except CalledProcessError as e:
+                        if out.exists():
+                            try:
+                                out.unlink()
+                            except OSError as cleanup_err:
+                                logging.warning(
+                                    "could not remove incomplete output %s: %s",
+                                    out,
+                                    cleanup_err,
+                                )
+                        if attempt >= max_hw_retries:
+                            logging.warning(
+                                "ffmpeg %s failed (rc=%s) for %s -> %s; will fall back to software transcode",
+                                label,
+                                e.returncode,
+                                mkv,
+                                out,
+                            )
+                            hw_failed = True
+                            break
+                        else:
+                            logging.warning(
+                                "ffmpeg %s failed (rc=%s) for %s -> %s; retrying...",
+                                label,
+                                e.returncode,
+                                mkv,
+                                out,
+                            )
 
             if hw_failed:
                 if out.exists():
