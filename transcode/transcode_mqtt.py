@@ -37,6 +37,30 @@ def is_temp_mkv(path: Path) -> bool:
     return bool(TEMP_MKV_RE.match(path.name))
 
 
+def probe_duration(path: Path) -> float | None:
+    """
+    Returns media duration in seconds (float) via ffprobe, or None if unavailable.
+    """
+    try:
+        out = subprocess.check_output(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                str(path),
+            ],
+            stderr=subprocess.DEVNULL,
+        )
+        return float(out.strip()) if out else None
+    except (CalledProcessError, FileNotFoundError, ValueError) as e:
+        logging.warning("ffprobe duration failed for %s: %s", path, e)
+        return None
+
+
 # --------------------
 # Logging
 # --------------------
@@ -303,6 +327,28 @@ def transcode_dir(client, job: dict):
                     ]
 
                     subprocess.run(retry_cmd, check=True)
+
+                in_duration = probe_duration(mkv)
+                out_duration = probe_duration(out)
+                if in_duration and out_duration:
+                    tolerance = max(1.0, in_duration * 0.01)  # 1s or 1% of input
+                    if abs(in_duration - out_duration) > tolerance:
+                        logging.error(
+                            "duration mismatch (in=%0.2fs, out=%0.2fs, tol=%0.2fs) for %s",
+                            in_duration,
+                            out_duration,
+                            tolerance,
+                            mkv,
+                        )
+                        try:
+                            out.unlink()
+                        except OSError as cleanup_err:
+                            logging.warning(
+                                "could not remove mismatched output %s: %s",
+                                out,
+                                cleanup_err,
+                            )
+                        raise RuntimeError("duration mismatch after transcode")
 
             mqtt_publish(
                 client,
