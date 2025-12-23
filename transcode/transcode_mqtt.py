@@ -307,6 +307,8 @@ def transcode_dir(client, job: dict):
         ]
 
         try:
+            hw_failed = False
+
             with open("/var/lock/vaapi.lock", "w") as lock:
                 logging.info("waiting for GPU lock…")
                 fcntl.flock(lock, fcntl.LOCK_EX)
@@ -367,45 +369,48 @@ def transcode_dir(client, job: dict):
                         subprocess.run(retry_cmd, check=True)
                     except CalledProcessError as retry_err:
                         logging.warning(
-                            "retry with timestamp repair failed (rc=%s) for %s -> %s; falling back to software transcode",
+                            "retry with timestamp repair failed (rc=%s) for %s -> %s; will fall back to software transcode",
                             retry_err.returncode,
                             mkv,
                             out,
                         )
-                        if out.exists():
-                            try:
-                                out.unlink()
-                            except OSError as cleanup_err:
-                                logging.warning(
-                                    "could not remove failed output %s: %s",
-                                    out,
-                                    cleanup_err,
-                                )
+                        hw_failed = True
 
-                        sw_cmd = [
-                            "ffmpeg",
-                            "-i",
-                            str(mkv),
-                            "-map",
-                            "0:v:0",
-                            "-map",
-                            "0:a",
-                            "-map",
-                            "0:s?",
-                            "-c:v",
-                            "libx265",
-                            "-crf",
-                            "22",
-                            "-c:a",
-                            "copy",
-                            "-c:s",
-                            "copy",
-                            str(out),
-                        ]
-                        subprocess.run(sw_cmd, check=True)
+            if hw_failed:
+                if out.exists():
+                    try:
+                        out.unlink()
+                    except OSError as cleanup_err:
+                        logging.warning(
+                            "could not remove failed output %s: %s",
+                            out,
+                            cleanup_err,
+                        )
 
-                in_duration = probe_duration(mkv)
-                out_duration = probe_duration(out)
+                sw_cmd = [
+                    "ffmpeg",
+                    "-i",
+                    str(mkv),
+                    "-map",
+                    "0:v:0",
+                    "-map",
+                    "0:a",
+                    "-map",
+                    "0:s?",
+                    "-c:v",
+                    "libx265",
+                    "-crf",
+                    "22",
+                    "-c:a",
+                    "copy",
+                    "-c:s",
+                    "copy",
+                    str(out),
+                ]
+                subprocess.run(sw_cmd, check=True)
+
+            in_duration = probe_duration(mkv)
+            out_duration = probe_duration(out)
                 if in_duration and out_duration:
                     tolerance = max(1.0, in_duration * 0.01)  # 1s or 1% of input
                     if abs(in_duration - out_duration) > tolerance:
