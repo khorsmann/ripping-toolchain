@@ -284,63 +284,48 @@ def transcode_dir(client, job: dict):
 
         vf_filter = vaapi_filter_for(mkv)
 
-        base_cmd = [
-            "ffmpeg",
-            "-vaapi_device",
-            "/dev/dri/renderD128",
-            "-hwaccel",
-            "vaapi",
-            "-hwaccel_output_format",
-            "vaapi",
-            "-i",
-            str(mkv),
-            "-map",
-            "0:v:0",
-            "-map",
-            "0:a",
-            "-map",
-            "0:s?",
-            "-c:v",
-            "hevc_vaapi",
-            "-qp",
-            "22",
-            "-c:a",
-            "copy",
-            "-c:s",
-            "copy",
-            str(out),
-        ]
-
-        retry_cmd = [
-            "ffmpeg",
-            "-vaapi_device",
-            "/dev/dri/renderD128",
-            "-hwaccel",
-            "vaapi",
-            "-hwaccel_output_format",
-            "vaapi",
-            "-fflags",
-            "+genpts",
-            "-avoid_negative_ts",
-            "make_zero",
-            "-i",
-            str(mkv),
-            "-map",
-            "0:v:0",
-            "-map",
-            "0:a",
-            "-map",
-            "0:s?",
-            "-c:v",
-            "hevc_vaapi",
-            "-qp",
-            "22",
-            "-c:a",
-            "copy",
-            "-c:s",
-            "copy",
-            str(out),
-        ]
+        def build_hw_cmd(with_ts_fix: bool, apply_filter: bool) -> list[str]:
+            cmd = [
+                "ffmpeg",
+                "-vaapi_device",
+                "/dev/dri/renderD128",
+                "-hwaccel",
+                "vaapi",
+                "-hwaccel_output_format",
+                "vaapi",
+            ]
+            if with_ts_fix:
+                cmd.extend(
+                    [
+                        "-fflags",
+                        "+genpts",
+                        "-avoid_negative_ts",
+                        "make_zero",
+                    ]
+                )
+            cmd.extend(["-i", str(mkv)])
+            if apply_filter and vf_filter:
+                cmd.extend(["-vf", vf_filter])
+            cmd.extend(
+                [
+                    "-map",
+                    "0:v:0",
+                    "-map",
+                    "0:a",
+                    "-map",
+                    "0:s?",
+                    "-c:v",
+                    "hevc_vaapi",
+                    "-qp",
+                    "22",
+                    "-c:a",
+                    "copy",
+                    "-c:s",
+                    "copy",
+                    str(out),
+                ]
+            )
+            return cmd
 
         try:
             hw_failed = False
@@ -351,10 +336,11 @@ def transcode_dir(client, job: dict):
 
                 max_hw_retries = 5  # retries after initial attempt
                 for attempt in range(0, max_hw_retries + 1):
-                    cmd = list(base_cmd if attempt == 0 else retry_cmd)
                     use_filter = attempt >= 1 and vf_filter
-                    if use_filter:
-                        cmd.extend(["-vf", vf_filter])
+                    with_ts = attempt >= 1
+                    cmd = build_hw_cmd(
+                        with_ts_fix=with_ts, apply_filter=bool(use_filter)
+                    )
                     label = (
                         "initial (no filter)"
                         if attempt == 0
