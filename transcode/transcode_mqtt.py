@@ -11,6 +11,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from subprocess import CalledProcessError
 
 import paho.mqtt.client as mqtt  # type: ignore
 
@@ -219,13 +220,58 @@ def transcode_dir(client, job: dict):
             },
         )
 
+        base_cmd = [
+            "ffmpeg",
+            "-vaapi_device",
+            "/dev/dri/renderD128",
+            "-hwaccel",
+            "vaapi",
+            "-hwaccel_output_format",
+            "vaapi",
+            "-i",
+            str(mkv),
+            "-map",
+            "0:v:0",
+            "-map",
+            "0:a",
+            "-map",
+            "0:s?",
+            "-c:v",
+            "hevc_vaapi",
+            "-qp",
+            "22",
+            "-c:a",
+            "copy",
+            "-c:s",
+            "copy",
+            str(out),
+        ]
+
         try:
             with open("/var/lock/vaapi.lock", "w") as lock:
                 logging.info("waiting for GPU lock…")
                 fcntl.flock(lock, fcntl.LOCK_EX)
 
-                subprocess.run(
-                    [
+                try:
+                    subprocess.run(base_cmd, check=True)
+                except CalledProcessError as e:
+                    logging.warning(
+                        "ffmpeg failed (rc=%s) for %s -> %s; retrying with timestamp repair flags",
+                        e.returncode,
+                        mkv,
+                        out,
+                    )
+                    if out.exists():
+                        try:
+                            out.unlink()
+                        except OSError as cleanup_err:
+                            logging.warning(
+                                "could not remove incomplete output %s: %s",
+                                out,
+                                cleanup_err,
+                            )
+
+                    retry_cmd = [
                         "ffmpeg",
                         "-vaapi_device",
                         "/dev/dri/renderD128",
@@ -233,6 +279,10 @@ def transcode_dir(client, job: dict):
                         "vaapi",
                         "-hwaccel_output_format",
                         "vaapi",
+                        "-fflags",
+                        "+genpts",
+                        "-avoid_negative_ts",
+                        "make_zero",
                         "-i",
                         str(mkv),
                         "-map",
@@ -250,9 +300,9 @@ def transcode_dir(client, job: dict):
                         "-c:s",
                         "copy",
                         str(out),
-                    ],
-                    check=True,
-                )
+                    ]
+
+                    subprocess.run(retry_cmd, check=True)
 
             mqtt_publish(
                 client,
