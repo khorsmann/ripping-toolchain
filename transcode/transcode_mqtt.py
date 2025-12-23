@@ -85,10 +85,16 @@ def vaapi_filter_for(path: Path) -> str:
         field_order = out.strip().lower()
         interlaced = {"tt", "bb", "tb", "bt"}
         if field_order in interlaced:
-            logging.info("detected interlaced video (%s) for %s; applying deinterlace_vaapi", field_order, path)
+            logging.info(
+                "detected interlaced video (%s) for %s; applying deinterlace_vaapi",
+                field_order,
+                path,
+            )
             return "format=nv12,hwupload,deinterlace_vaapi"
     except Exception as e:
-        logging.warning("ffprobe field_order failed for %s: %s; using default VAAPI filter", path, e)
+        logging.warning(
+            "ffprobe field_order failed for %s: %s; using default VAAPI filter", path, e
+        )
     return "format=nv12,hwupload"
 
 
@@ -411,25 +417,25 @@ def transcode_dir(client, job: dict):
 
             in_duration = probe_duration(mkv)
             out_duration = probe_duration(out)
-                if in_duration and out_duration:
-                    tolerance = max(1.0, in_duration * 0.01)  # 1s or 1% of input
-                    if abs(in_duration - out_duration) > tolerance:
-                        logging.error(
-                            "duration mismatch (in=%0.2fs, out=%0.2fs, tol=%0.2fs) for %s",
-                            in_duration,
-                            out_duration,
-                            tolerance,
-                            mkv,
+            if in_duration and out_duration:
+                tolerance = max(1.0, in_duration * 0.01)  # 1s or 1% of input
+                if abs(in_duration - out_duration) > tolerance:
+                    logging.error(
+                        "duration mismatch (in=%0.2fs, out=%0.2fs, tol=%0.2fs) for %s",
+                        in_duration,
+                        out_duration,
+                        tolerance,
+                        mkv,
+                    )
+                    try:
+                        out.unlink()
+                    except OSError as cleanup_err:
+                        logging.warning(
+                            "could not remove mismatched output %s: %s",
+                            out,
+                            cleanup_err,
                         )
-                        try:
-                            out.unlink()
-                        except OSError as cleanup_err:
-                            logging.warning(
-                                "could not remove mismatched output %s: %s",
-                                out,
-                                cleanup_err,
-                            )
-                        raise RuntimeError("duration mismatch after transcode")
+                    raise RuntimeError("duration mismatch after transcode")
 
             mqtt_publish(
                 client,
