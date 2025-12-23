@@ -125,6 +125,12 @@ def main() -> int:
         default="/etc/transcode-mqtt.env",
         help="Pfad zu KEY=VALUE Env-Datei (setzt fehlende Variablen)",
     )
+    parser.add_argument(
+        "--progress-every",
+        type=int,
+        default=500,
+        help="alle N Einträge einen Fortschritts-Log ausgeben (0=aus)",
+    )
     args = parser.parse_args()
 
     load_env_file(Path(args.env_file))
@@ -150,7 +156,14 @@ def main() -> int:
     mismatches = []
     probe_errors = []
 
-    for (kind, rel), entry in sorted(pairs.items()):
+    total = len(pairs)
+    if total:
+        print(f"Checking {total} entries...")
+
+    for idx, ((kind, rel), entry) in enumerate(sorted(pairs.items()), start=1):
+        if args.progress_every and idx % args.progress_every == 0:
+            print(f"  progress: {idx}/{total} checked")
+
         src = entry.get("src")
         dst = entry.get("dst")
         src_exists = src is not None and src.exists()
