@@ -61,6 +61,37 @@ def probe_duration(path: Path) -> float | None:
         return None
 
 
+def vaapi_filter_for(path: Path) -> str:
+    """
+    Chooses VAAPI filter chain based on field_order.
+    Interlaced -> deinterlace_vaapi; otherwise plain upload.
+    """
+    try:
+        out = subprocess.check_output(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=field_order",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                str(path),
+            ],
+            stderr=subprocess.DEVNULL,
+        ).decode()
+        field_order = out.strip().lower()
+        interlaced = {"tt", "bb", "tb", "bt"}
+        if field_order in interlaced:
+            logging.info("detected interlaced video (%s) for %s; applying deinterlace_vaapi", field_order, path)
+            return "format=nv12,hwupload,deinterlace_vaapi"
+    except Exception as e:
+        logging.warning("ffprobe field_order failed for %s: %s; using default VAAPI filter", path, e)
+    return "format=nv12,hwupload"
+
+
 # --------------------
 # Logging
 # --------------------
@@ -244,6 +275,8 @@ def transcode_dir(client, job: dict):
             },
         )
 
+        vf_filter = vaapi_filter_for(mkv)
+
         base_cmd = [
             "ffmpeg",
             "-vaapi_device",
@@ -252,6 +285,8 @@ def transcode_dir(client, job: dict):
             "vaapi",
             "-hwaccel_output_format",
             "vaapi",
+            "-vf",
+            vf_filter,
             "-i",
             str(mkv),
             "-map",
@@ -303,6 +338,8 @@ def transcode_dir(client, job: dict):
                         "vaapi",
                         "-hwaccel_output_format",
                         "vaapi",
+                        "-vf",
+                        vf_filter,
                         "-fflags",
                         "+genpts",
                         "-avoid_negative_ts",
@@ -326,7 +363,46 @@ def transcode_dir(client, job: dict):
                         str(out),
                     ]
 
-                    subprocess.run(retry_cmd, check=True)
+                    try:
+                        subprocess.run(retry_cmd, check=True)
+                    except CalledProcessError as retry_err:
+                        logging.warning(
+                            "retry with timestamp repair failed (rc=%s) for %s -> %s; falling back to software transcode",
+                            retry_err.returncode,
+                            mkv,
+                            out,
+                        )
+                        if out.exists():
+                            try:
+                                out.unlink()
+                            except OSError as cleanup_err:
+                                logging.warning(
+                                    "could not remove failed output %s: %s",
+                                    out,
+                                    cleanup_err,
+                                )
+
+                        sw_cmd = [
+                            "ffmpeg",
+                            "-i",
+                            str(mkv),
+                            "-map",
+                            "0:v:0",
+                            "-map",
+                            "0:a",
+                            "-map",
+                            "0:s?",
+                            "-c:v",
+                            "libx265",
+                            "-crf",
+                            "22",
+                            "-c:a",
+                            "copy",
+                            "-c:s",
+                            "copy",
+                            str(out),
+                        ]
+                        subprocess.run(sw_cmd, check=True)
 
                 in_duration = probe_duration(mkv)
                 out_duration = probe_duration(out)
