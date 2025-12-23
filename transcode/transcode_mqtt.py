@@ -61,10 +61,10 @@ def probe_duration(path: Path) -> float | None:
         return None
 
 
-def vaapi_filter_for(path: Path) -> str:
+def vaapi_filter_for(path: Path) -> str | None:
     """
     Chooses VAAPI filter chain based on field_order.
-    Interlaced -> deinterlace_vaapi; otherwise plain upload.
+    Interlaced -> deinterlace_vaapi; otherwise no filter.
     """
     try:
         out = subprocess.check_output(
@@ -90,12 +90,12 @@ def vaapi_filter_for(path: Path) -> str:
                 field_order,
                 path,
             )
-            return "format=nv12,hwupload,deinterlace_vaapi"
+            return "deinterlace_vaapi"
     except Exception as e:
         logging.warning(
             "ffprobe field_order failed for %s: %s; using default VAAPI filter", path, e
         )
-    return "format=nv12,hwupload"
+    return None
 
 
 # --------------------
@@ -292,8 +292,6 @@ def transcode_dir(client, job: dict):
             "vaapi",
             "-hwaccel_output_format",
             "vaapi",
-            "-vf",
-            vf_filter,
             "-i",
             str(mkv),
             "-map",
@@ -321,8 +319,6 @@ def transcode_dir(client, job: dict):
             "vaapi",
             "-hwaccel_output_format",
             "vaapi",
-            "-vf",
-            vf_filter,
             "-fflags",
             "+genpts",
             "-avoid_negative_ts",
@@ -355,11 +351,14 @@ def transcode_dir(client, job: dict):
 
                 max_hw_retries = 5  # retries after initial attempt
                 for attempt in range(0, max_hw_retries + 1):
-                    cmd = base_cmd if attempt == 0 else retry_cmd
+                    cmd = list(base_cmd if attempt == 0 else retry_cmd)
+                    use_filter = attempt >= 1 and vf_filter
+                    if use_filter:
+                        cmd.extend(["-vf", vf_filter])
                     label = (
-                        "initial"
+                        "initial (no filter)"
                         if attempt == 0
-                        else f"retry {attempt}/{max_hw_retries}"
+                        else f"retry {attempt}/{max_hw_retries}{' (+filter)' if use_filter else ''}"
                     )
                     try:
                         subprocess.run(cmd, check=True)
