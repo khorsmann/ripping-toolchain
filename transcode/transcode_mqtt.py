@@ -29,8 +29,11 @@ def getenv_bool(name, default="false"):
     return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "on"}
 
 
+TEMP_MKV_RE = re.compile(r"^[A-Za-z0-9]{2}_[A-Za-z][0-9]{2}\.mkv$", re.IGNORECASE)
+
+
 def is_temp_mkv(path: Path) -> bool:
-    return bool(re.match(r"^[A-Za-z0-9]{2}_[A-Za-z][0-9]{2}\\.mkv$", path.name))
+    return bool(TEMP_MKV_RE.match(path.name))
 
 
 # --------------------
@@ -148,7 +151,12 @@ def transcode_dir(client, job: dict):
             else:
                 logging.warning("job path is a file but not an MKV: %s", src_dir)
         else:
-            mkv_files = [p for p in src_dir.rglob("*.mkv") if not is_temp_mkv(p)]
+            mkv_files = []
+            for p in src_dir.rglob("*.mkv"):
+                if is_temp_mkv(p):
+                    logging.info("skip temp mkv from scan: %s", p)
+                    continue
+                mkv_files.append(p)
     else:
         logging.warning("job without path or files, skipping")
         return

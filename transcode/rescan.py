@@ -24,7 +24,7 @@ from typing import Dict, List, Tuple
 import paho.mqtt.client as mqtt  # type: ignore
 
 MQTT_PAYLOAD_VERSION = 2
-TEMP_MKV_RE = re.compile(r"^[A-Za-z0-9]{2}_[A-Za-z][0-9]{2}\\.mkv$")
+TEMP_MKV_RE = re.compile(r"^[A-Za-z0-9]{2}_[A-Za-z][0-9]{2}\.mkv$", re.IGNORECASE)
 
 
 # --------------------
@@ -122,6 +122,7 @@ def collect_missing_series_dirs(
 
     for mkv in src_base.rglob("*.mkv"):
         if is_temp_mkv(mkv):
+            logging.info("skip temp mkv from scan: %s", mkv)
             skipped.append(mkv)
             continue
         rel = mkv.relative_to(src_base)
@@ -148,6 +149,7 @@ def collect_missing_movie_dirs(
 
     for mkv in movie_src_base.rglob("*.mkv"):
         if is_temp_mkv(mkv):
+            logging.info("skip temp mkv from scan: %s", mkv)
             skipped.append(mkv)
             continue
         rel = mkv.relative_to(movie_src_base)
