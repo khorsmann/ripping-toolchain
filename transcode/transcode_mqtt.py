@@ -126,6 +126,7 @@ MQTT_TOPIC_START = getenv("MQTT_TOPIC_START", "media/transcode/start")
 MQTT_TOPIC_DONE = getenv("MQTT_TOPIC_DONE", "media/transcode/done")
 MQTT_TOPIC_ERROR = getenv("MQTT_TOPIC_ERROR", "media/transcode/error")
 MQTT_PAYLOAD_VERSION = 2
+ENABLE_SW_FALLBACK = getenv_bool("ENABLE_SW_FALLBACK", "false")
 
 
 # --------------------
@@ -394,6 +395,11 @@ def transcode_dir(client, job: dict):
                             )
 
             if hw_failed:
+                if not ENABLE_SW_FALLBACK:
+                    raise RuntimeError(
+                        "hardware transcode failed after retries (SW fallback disabled)"
+                    )
+
                 if out.exists():
                     try:
                         out.unlink()
