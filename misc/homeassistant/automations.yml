@@ -4,14 +4,68 @@
   trigger:
     - platform: mqtt
       topic: media/rip/done
+  condition:
+    - condition: template
+      value_template: "{{ trigger.payload_json.version == 2 }}"
   action:
     - service: notify.mobile_app_meinphone
       data:
-        title: "DVD fertig gerippt"
+        title: "DVD fertig gerippt (v2)"
         message: >
-          {{ trigger.payload_json.series }} S{{ trigger.payload_json.season }}
-          {{ trigger.payload_json.disc }} – {{ trigger.payload_json.episodes }}
-          Episoden liegen jetzt unter {{ trigger.payload_json.path }}.
+          {% set pj = trigger.payload_json %}
+          {% set files = pj.files | default([], true) %}
+          {% set file_count = files | count %}
+          {% set series = pj.series | default('', true) %}
+          {% set season = pj.season | default('', true) %}
+          {% set disc = pj.disc | default('', true) %}
+          {% set mode = pj.mode | default('series', true) %}
+          {% set path = pj.path | default('', true) %}
+          {% if series %}{{ series }}{% else %}Unbekannte Serie{% endif %}
+          {% if season %} S{{ season }}{% endif %}{% if disc %} {{ disc }}{% endif %} ({{ mode }})
+          – {{ file_count }} Datei{% if file_count != 1 %}en{% endif %} unter {{ path }}.
+        data:
+          ttl: 0
+          priority: high
+
+- alias: Transcode erfolgreich
+  description: Benachrichtigt bei erfolgreichem Transcode (media/transcode/done, v2)
+  mode: single
+  trigger:
+    - platform: mqtt
+      topic: media/transcode/done
+  condition:
+    - condition: template
+      value_template: "{{ trigger.payload_json.version == 2 }}"
+  action:
+    - service: notify.mobile_app_meinphone
+      data:
+        title: "Transcode fertig (v2)"
+        message: >
+          {% set pj = trigger.payload_json %}
+          {% set file = pj.file | default('', true) %}
+          Transcode abgeschlossen: {{ file }}.
+        data:
+          ttl: 0
+          priority: high
+
+- alias: Transcode Fehler
+  description: Benachrichtigt bei Transcode-Fehler (media/transcode/error, v2)
+  mode: single
+  trigger:
+    - platform: mqtt
+      topic: media/transcode/error
+  condition:
+    - condition: template
+      value_template: "{{ trigger.payload_json.version == 2 }}"
+  action:
+    - service: notify.mobile_app_meinphone
+      data:
+        title: "Transcode fehlgeschlagen (v2)"
+        message: >
+          {% set pj = trigger.payload_json %}
+          {% set file = pj.file | default('', true) %}
+          {% set err = pj.error | default('unbekannter Fehler', true) %}
+          Transcode-Fehler: {{ file }} – {{ err }}.
         data:
           ttl: 0
           priority: high

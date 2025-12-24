@@ -283,28 +283,31 @@ def transcode_dir(client, job: dict):
             },
         )
 
-        # Build explicit filter chain to keep control of uploads/scaling:
-        # - Decode to system NV12 frames, then hwupload.
-        # - Optional deinterlace.
-        # - scale_vaapi to NV12 to match encoder expectations.
+        # Build VAAPI filter chain:
+        # - Optional deinterlace
+        # - scale_vaapi to NV12 to match encoder expectations
         deint = vaapi_filter_for(mkv)
-        filter_parts = ["format=nv12", "hwupload"]
-        if deint:
-            filter_parts.append(deint)
-        filter_parts.append("scale_vaapi=format=nv12")
-        vf_filter_base = ",".join(filter_parts)
+        vf_filter_base = (
+            "deinterlace_vaapi,scale_vaapi=format=nv12"
+            if deint
+            else "scale_vaapi=format=nv12"
+        )
 
         def build_hw_cmd(
             with_ts_fix: bool, filter_str: str | None, add_color_metadata: bool
         ) -> list[str]:
             cmd = [
                 "ffmpeg",
-                "-vaapi_device",
-                "/dev/dri/renderD128",
+                "-init_hw_device",
+                "vaapi=va:/dev/dri/renderD128",
+                "-filter_hw_device",
+                "va",
+                "-hwaccel_device",
+                "va",
                 "-hwaccel",
                 "vaapi",
                 "-hwaccel_output_format",
-                "nv12",
+                "vaapi",
             ]
             # TODO: consider always adding -fflags +genpts -avoid_negative_ts make_zero here
             # to smooth PTS and improve seeking (currently only applied on retries).
