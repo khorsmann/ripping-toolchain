@@ -64,7 +64,8 @@ def probe_duration(path: Path) -> float | None:
 def vaapi_filter_for(path: Path) -> str | None:
     """
     Chooses VAAPI filter chain based on field_order.
-    Interlaced -> deinterlace_vaapi; otherwise no filter.
+    Interlaced -> deinterlace_vaapi + scale_vaapi (explicit format) to avoid
+    auto_inserted sw scaler incompatibilities.
     """
     try:
         out = subprocess.check_output(
@@ -86,11 +87,13 @@ def vaapi_filter_for(path: Path) -> str | None:
         interlaced = {"tt", "bb", "tb", "bt"}
         if field_order in interlaced:
             logging.info(
-                "detected interlaced video (%s) for %s; applying deinterlace_vaapi",
+                "detected interlaced video (%s) for %s; applying deinterlace_vaapi + scale_vaapi=format=nv12",
                 field_order,
                 path,
             )
-            return "deinterlace_vaapi"
+            # Explicit scale_vaapi keeps frames in VAAPI surfaces and prevents
+            # the auto_inserted scaler from negotiating an unsupported format.
+            return "deinterlace_vaapi,scale_vaapi=format=nv12"
     except Exception as e:
         logging.warning(
             "ffprobe field_order failed for %s: %s; using default VAAPI filter", path, e
