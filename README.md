@@ -48,6 +48,7 @@ transcode_mqtt (FFmpeg) <--- MQTT subscription
    - Sobald ein `media/rip/done`-Event eingeht, landet der Pfad in einer internen Queue. Ein Worker-Thread verarbeitet das Verzeichnis sequenziell:
      - Vor jeder Datei wird `media/transcode/start` inkl. Eingangs- und Ausgabepfad publiziert.
      - Während `ffmpeg` läuft, hält ein Lock unter `/var/lock/vaapi.lock` andere Instanzen von der GPU fern.
+     - Hardware-Retries sind über `MAX_HW_RETRIES` konfigurierbar (Default 2 nach dem initialen Versuch).
      - Nach erfolgreichem Transcode wird `media/transcode/done` gesendet; Fehler landen auf `media/transcode/error`.
    - Idempotent: existiert die Zielfile bereits, wird sie übersprungen.
    - Serien landen unter `SERIES_DST_BASE` (Default `/media/Serien`) und spiegeln die Struktur unter `SRC_BASE/<SERIES_SUBPATH>` (Standard `Serien`). Filme (`mode=movie`) werden nach `MOVIE_DST_BASE` (Default `/media/Filme`, überschreibbar) abgelegt.

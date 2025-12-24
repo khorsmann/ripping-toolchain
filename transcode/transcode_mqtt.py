@@ -66,6 +66,7 @@ def vaapi_filter_for(path: Path) -> str | None:
     Chooses VAAPI filter chain based on field_order.
     Interlaced -> deinterlace_vaapi + scale_vaapi (explicit format) to avoid
     auto_inserted sw scaler incompatibilities.
+    Progressive -> no special filter (caller applies a default scale_vaapi).
     """
     try:
         out = subprocess.check_output(
@@ -130,6 +131,7 @@ MQTT_TOPIC_DONE = getenv("MQTT_TOPIC_DONE", "media/transcode/done")
 MQTT_TOPIC_ERROR = getenv("MQTT_TOPIC_ERROR", "media/transcode/error")
 MQTT_PAYLOAD_VERSION = 2
 ENABLE_SW_FALLBACK = getenv_bool("ENABLE_SW_FALLBACK", "false")
+MAX_HW_RETRIES = max(0, int(getenv("MAX_HW_RETRIES", "2")))
 
 
 # --------------------
@@ -285,7 +287,9 @@ def transcode_dir(client, job: dict):
             },
         )
 
-        vf_filter = vaapi_filter_for(mkv)
+        # Always enforce an explicit VAAPI format to avoid auto_inserted sw scalers
+        # conflicting with VAAPI filters.
+        vf_filter = vaapi_filter_for(mkv) or "scale_vaapi=format=nv12"
 
         def build_hw_cmd(with_ts_fix: bool, apply_filter: bool) -> list[str]:
             cmd = [
@@ -339,15 +343,15 @@ def transcode_dir(client, job: dict):
                 logging.info("waiting for GPU lock…")
                 fcntl.flock(lock, fcntl.LOCK_EX)
 
-                max_hw_retries = 5  # retries after initial attempt
+                max_hw_retries = MAX_HW_RETRIES
                 for attempt in range(0, max_hw_retries + 1):
-                    use_filter = attempt >= 1 and vf_filter
+                    use_filter = True  # always enforce explicit VAAPI format to avoid auto_scale clashes
                     with_ts = attempt >= 1
                     cmd = build_hw_cmd(
                         with_ts_fix=with_ts, apply_filter=bool(use_filter)
                     )
                     label = (
-                        "initial (no filter)"
+                        "initial (with filter)"
                         if attempt == 0
                         else f"retry {attempt}/{max_hw_retries}{' (+filter)' if use_filter else ''}"
                     )
