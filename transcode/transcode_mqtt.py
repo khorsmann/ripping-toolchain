@@ -63,10 +63,8 @@ def probe_duration(path: Path) -> float | None:
 
 def vaapi_filter_for(path: Path) -> str | None:
     """
-    Chooses VAAPI filter chain based on field_order.
-    Interlaced -> deinterlace_vaapi + scale_vaapi (explicit format) to avoid
-    auto_inserted sw scaler incompatibilities.
-    Progressive -> no special filter (caller applies a default scale_vaapi).
+    Chooses VAAPI deinterlace step based on field_order.
+    Interlaced -> deinterlace_vaapi; progressive -> None.
     """
     try:
         out = subprocess.check_output(
@@ -88,13 +86,11 @@ def vaapi_filter_for(path: Path) -> str | None:
         interlaced = {"tt", "bb", "tb", "bt"}
         if field_order in interlaced:
             logging.info(
-                "detected interlaced video (%s) for %s; applying deinterlace_vaapi + scale_vaapi=format=nv12",
+                "detected interlaced video (%s) for %s; applying deinterlace_vaapi",
                 field_order,
                 path,
             )
-            # Explicit scale_vaapi keeps frames in VAAPI surfaces and prevents
-            # the auto_inserted scaler from negotiating an unsupported format.
-            return "deinterlace_vaapi,scale_vaapi=format=nv12"
+            return "deinterlace_vaapi"
     except Exception as e:
         logging.warning(
             "ffprobe field_order failed for %s: %s; using default VAAPI filter", path, e
@@ -287,11 +283,20 @@ def transcode_dir(client, job: dict):
             },
         )
 
-        # Always enforce an explicit VAAPI format to avoid auto_inserted sw scalers
-        # conflicting with VAAPI filters.
-        vf_filter = vaapi_filter_for(mkv) or "scale_vaapi=format=nv12"
+        # Build explicit filter chain to keep control of uploads/scaling:
+        # - Decode to system NV12 frames, then hwupload.
+        # - Optional deinterlace.
+        # - scale_vaapi to NV12 to match encoder expectations.
+        deint = vaapi_filter_for(mkv)
+        filter_parts = ["format=nv12", "hwupload"]
+        if deint:
+            filter_parts.append(deint)
+        filter_parts.append("scale_vaapi=format=nv12")
+        vf_filter_base = ",".join(filter_parts)
 
-        def build_hw_cmd(with_ts_fix: bool, apply_filter: bool) -> list[str]:
+        def build_hw_cmd(
+            with_ts_fix: bool, filter_str: str | None, add_color_metadata: bool
+        ) -> list[str]:
             cmd = [
                 "ffmpeg",
                 "-vaapi_device",
@@ -299,7 +304,7 @@ def transcode_dir(client, job: dict):
                 "-hwaccel",
                 "vaapi",
                 "-hwaccel_output_format",
-                "vaapi",
+                "nv12",
             ]
             # TODO: consider always adding -fflags +genpts -avoid_negative_ts make_zero here
             # to smooth PTS and improve seeking (currently only applied on retries).
@@ -313,8 +318,19 @@ def transcode_dir(client, job: dict):
                     ]
                 )
             cmd.extend(["-i", str(mkv)])
-            if apply_filter and vf_filter:
-                cmd.extend(["-vf", vf_filter])
+            if add_color_metadata:
+                cmd.extend(
+                    [
+                        "-colorspace",
+                        "bt470bg",
+                        "-color_primaries",
+                        "smpte170m",
+                        "-color_trc",
+                        "smpte170m",
+                    ]
+                )
+            if filter_str:
+                cmd.extend(["-vf", filter_str])
             cmd.extend(
                 [
                     "-map",
@@ -345,15 +361,19 @@ def transcode_dir(client, job: dict):
 
                 max_hw_retries = MAX_HW_RETRIES
                 for attempt in range(0, max_hw_retries + 1):
-                    use_filter = True  # always enforce explicit VAAPI format to avoid auto_scale clashes
+                    # attempt 0: base filter; retries: base filter + TS fix + color metadata
+                    use_filter = vf_filter_base
                     with_ts = attempt >= 1
+                    add_color_metadata = attempt >= 1
                     cmd = build_hw_cmd(
-                        with_ts_fix=with_ts, apply_filter=bool(use_filter)
+                        with_ts_fix=with_ts,
+                        filter_str=use_filter,
+                        add_color_metadata=add_color_metadata,
                     )
                     label = (
-                        "initial (with filter)"
+                        "initial (base filter)"
                         if attempt == 0
-                        else f"retry {attempt}/{max_hw_retries}{' (+filter)' if use_filter else ''}"
+                        else f"retry {attempt}/{max_hw_retries} (+color metadata)"
                     )
                     try:
                         subprocess.run(cmd, check=True)
