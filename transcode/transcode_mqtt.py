@@ -294,6 +294,8 @@ def transcode_dir(client, job: dict):
                 "-hwaccel_output_format",
                 "vaapi",
             ]
+            # TODO: consider always adding -fflags +genpts -avoid_negative_ts make_zero here
+            # to smooth PTS and improve seeking (currently only applied on retries).
             if with_ts_fix:
                 cmd.extend(
                     [

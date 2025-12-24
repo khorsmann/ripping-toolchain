@@ -13,6 +13,9 @@ import socket
 import subprocess
 import sys
 import time
+import fcntl
+import secrets
+import shutil
 from pathlib import Path
 
 import paho.mqtt.client as mqtt
@@ -77,6 +80,29 @@ def load_config(path: Path) -> dict:
 def run(cmd):
     print("▶", " ".join(cmd))
     return subprocess.run(cmd, check=True, capture_output=True, text=True).stdout
+
+
+class FileLock:
+    """
+    Simple advisory lock using fcntl.
+    """
+
+    def __init__(self, path: Path):
+        self.path = path
+        self._fh = None
+
+    def __enter__(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._fh = self.path.open("w")
+        fcntl.flock(self._fh, fcntl.LOCK_EX)
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        if self._fh:
+            try:
+                fcntl.flock(self._fh, fcntl.LOCK_UN)
+            finally:
+                self._fh.close()
 
 
 # TINFO-Zeilen sehen z.B. so aus:
@@ -327,11 +353,13 @@ def main():
         outdir = (base_raw / movie_subpath).resolve()
         info_file = outdir / f"{movie_name}.info"
         movie_output = outdir / f"{movie_name}.mkv"
+        tmp_dir = outdir / f"{movie_name}.tmp{secrets.token_hex(2)}"
     else:
         outdir = (
             base_raw / series_subpath / args.series / f"S{args.season}" / args.disc
         ).resolve()
         info_file = outdir / f"{args.disc}.info"
+        tmp_dir = None
     outdir.mkdir(parents=True, exist_ok=True)
     payload_files = []
 
@@ -384,7 +412,9 @@ def main():
             movie_title = max(usable, key=lambda t: (t["minutes"], -t["title_id"]))
             tid = movie_title["title_id"]
 
-            print(f"🎬 Ripping movie title {tid} → {movie_output}")
+            tmp_dir.mkdir(parents=True, exist_ok=True)
+
+            print(f"🎬 Ripping movie title {tid} → {movie_output} (tmp {tmp_dir.name})")
             run(
                 [
                     "makemkvcon",
@@ -393,17 +423,22 @@ def main():
                     "mkv",
                     disc_target,
                     str(tid),
-                    str(outdir),
+                    str(tmp_dir),
                 ]
             )
 
-            newest = newest_mkv(outdir)
+            newest = newest_mkv(tmp_dir)
             if newest is None:
                 raise RuntimeError("MakeMKV hat keine MKV-Datei erzeugt.")
-            if newest != movie_output:
+            if movie_output.exists():
+                print(
+                    f"⚠ Ziel erschien während des Rippens, lasse neue Datei unbenannt: {newest}"
+                )
+                episodes_ripped = 0
+            else:
                 newest.rename(movie_output)
-
-            episodes_ripped = 1
+                episodes_ripped = 1
+            shutil.rmtree(tmp_dir, ignore_errors=True)
         payload_files.append(movie_output)
 
     else:
@@ -439,7 +474,11 @@ def main():
             newest = newest_mkv(outdir)
             if newest is None:
                 raise RuntimeError("MakeMKV hat keine MKV-Datei erzeugt.")
-            if newest != out_file:
+            if out_file.exists():
+                print(
+                    f"⚠ Ziel erschien während des Rippens, lasse neue Datei unbenannt: {newest}"
+                )
+            elif newest != out_file:
                 newest.rename(out_file)
 
             episode += 1
