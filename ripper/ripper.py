@@ -16,6 +16,7 @@ import time
 import fcntl
 import secrets
 import shutil
+import unicodedata
 from pathlib import Path
 
 import paho.mqtt.client as mqtt
@@ -174,9 +175,17 @@ def parse_titles(info_text: str):
 
 def sanitize_movie_name(name: str) -> str:
     """
-    Normalisiert einen Movie-Namen für Dateinamen (nur Buchstaben, Zahlen, ._-).
+    Normalisiert einen Movie-Namen für Dateinamen.
+    - behält Umlaut/Unicode-Buchstaben
+    - ersetzt Whitespace durch _
+    - neutralisiert problematische Zeichen und Pfadseparatoren
     """
-    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", name).strip("_")
+    normalized = unicodedata.normalize("NFC", name).strip()
+    cleaned = normalized.replace("/", "-").replace("\\", "-")
+    cleaned = re.sub(r"[<>:\"|?*\x00-\x1F]", "_", cleaned)
+    cleaned = re.sub(r"\s+", "_", cleaned)
+    safe = re.sub(r"[^\w._-]+", "_", cleaned)
+    safe = re.sub(r"_+", "_", safe).strip("._")
     return safe or "movie"
 
 
