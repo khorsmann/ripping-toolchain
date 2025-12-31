@@ -244,7 +244,7 @@ def get_language_profile(allowed_langs: set[str]) -> Path:
     """
     Stellt ein persistentes MakeMKV-Profil bereit, das nur die erlaubten Sprachen auswählt.
     """
-    selection = "|".join(sorted(allowed_langs))
+    selection = "|".join(f"language:{lang}" for lang in sorted(allowed_langs))
     profile_xml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <profiles>
   <profile name="codex-lang-filter">
