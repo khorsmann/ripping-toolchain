@@ -115,6 +115,7 @@ SINFO_RE = re.compile(
 
 
 ALLOWED_LANGS = {"de", "deu", "ger", "en", "eng"}
+PROFILE_LANGS = ("eng", "deu", "ger")
 
 
 def parse_duration_to_minutes(dur: str) -> int:
@@ -244,22 +245,24 @@ def get_language_profile(allowed_langs: set[str]) -> Path:
     """
     Stellt ein persistentes MakeMKV-Profil bereit, das nur die erlaubten Sprachen auswählt.
     """
-    selection = "|".join(f"language:{lang}" for lang in sorted(allowed_langs))
+    # MakeMKV DefaultSelectionString-Syntax nutzt Kurzsprachen ohne Prefix.
+    # Strikte Auswahl: nur Video + Audio/Subtitles in eng/deu/ger.
+    lang_or = "|".join(PROFILE_LANGS)
     profile_xml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <profiles>
   <profile name="codex-lang-filter">
     <app_DefaultSelectionString>
 -sel:all
 +sel:video
-+sel:audio&amp;({selection})
-+sel:subtitle&amp;({selection})
++sel:(audio&amp;({lang_or}))
++sel:(subtitle&amp;({lang_or}))
     </app_DefaultSelectionString>
   </profile>
 </profiles>
 """
     profile_path = Path(__file__).with_name("makemkv_lang_profile.xml")
-    if not profile_path.exists():
-        profile_path.write_text(profile_xml)
+    # Schreibe jedes Mal, um Syntax-Anpassungen sicher zu verteilen.
+    profile_path.write_text(profile_xml)
     return profile_path
 
 
