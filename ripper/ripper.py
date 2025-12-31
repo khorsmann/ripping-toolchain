@@ -17,9 +17,10 @@ import fcntl
 import secrets
 import shutil
 import unicodedata
+import tempfile
 from pathlib import Path
 
-import paho.mqtt.client as mqtt
+import paho.mqtt.client as mqtt  # type: ignore
 
 MQTT_PAYLOAD_VERSION = 2
 try:  # Python 3.11+ ships tomllib, tomli is fallback for older versions
@@ -109,6 +110,12 @@ class FileLock:
 # TINFO-Zeilen sehen z.B. so aus:
 # TINFO:0,9,0,"0:43:31"
 TINFO_RE = re.compile(r'^TINFO:(?P<title>\d+),(?P<key>\d+),\d+,"(?P<value>.*)"$')
+SINFO_RE = re.compile(
+    r'^SINFO:(?P<title>\d+),(?P<track>\d+),(?P<key>\d+),\d+,"(?P<value>.*)"$'
+)
+
+
+ALLOWED_LANGS = {"de", "deu", "ger", "en", "eng"}
 
 
 def parse_duration_to_minutes(dur: str) -> int:
@@ -171,6 +178,91 @@ def parse_titles(info_text: str):
 
     # nach Titel-ID sortieren (stabil, nachvollziehbar)
     return sorted(result, key=lambda x: x["title_id"])
+
+
+def extract_language_tags(info_text: str):
+    """
+    Prüft SINFO-Zeilen auf Sprachkennungen.
+    Liefert:
+    {
+        "audio_langs": set[str],
+        "subtitle_langs": set[str],
+        "has_tags": bool,   # mindestens eine Spur hat ein Sprach-Tag
+        "has_unknown": bool # mindestens eine Spur ohne Sprach-Tag
+    }
+    """
+    tracks = {}
+    for line in info_text.splitlines():
+        m = SINFO_RE.match(line)
+        if not m:
+            continue
+        tid = int(m.group("title"))
+        track = int(m.group("track"))
+        key = int(m.group("key"))
+        value = m.group("value")
+        tracks.setdefault((tid, track), {})[key] = value
+
+    audio_langs = set()
+    subtitle_langs = set()
+    has_tags = False
+    has_unknown = False
+
+    for meta in tracks.values():
+        track_type = meta.get(1)
+        if track_type not in ("Audio", "Subtitles"):
+            continue
+        lang = normalize_language(meta.get(3) or meta.get(4))
+        if lang:
+            has_tags = True
+            if track_type == "Audio":
+                audio_langs.add(lang)
+            else:
+                subtitle_langs.add(lang)
+        else:
+            has_unknown = True
+
+    return {
+        "audio_langs": audio_langs,
+        "subtitle_langs": subtitle_langs,
+        "has_tags": has_tags,
+        "has_unknown": has_unknown,
+    }
+
+
+def normalize_language(lang_raw):
+    """
+    Normalisiert Sprachcodes auf einen einfachen Vergleichswert.
+    """
+    if lang_raw is None:
+        return None
+    lang = str(lang_raw).strip().lower()
+    if not lang:
+        return None
+    return lang.split("-")[0]  # IETF-Codes wie de-DE auf den Prefix kürzen
+
+
+def build_language_profile(allowed_langs: set[str]) -> Path:
+    """
+    Baut ein temporäres MakeMKV-Profil, das nur die erlaubten Sprachen auswählt.
+    """
+    selection = "|".join(sorted(allowed_langs))
+    profile_xml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<profiles>
+  <profile name="codex-lang-filter">
+    <app_DefaultSelectionString>
+-sel:all
++sel:audio&amp;(language:{selection})
++sel:subtitle&amp;(language:{selection})
+    </app_DefaultSelectionString>
+  </profile>
+</profiles>
+"""
+    tmp = tempfile.NamedTemporaryFile(
+        mode="w", suffix=".xml", prefix="makemkv_lang_", delete=False
+    )
+    tmp.write(profile_xml)
+    tmp.flush()
+    return Path(tmp.name)
 
 
 def sanitize_movie_name(name: str) -> str:
@@ -376,6 +468,33 @@ def main():
     info_text = run(["makemkvcon", "--noscan", "-r", "info", disc_target])
     info_file.write_text(info_text)
 
+    profile_path: Path | None = None
+    lang_info = extract_language_tags(info_text)
+    language_tags_present = lang_info["has_tags"]
+    allowed_present = bool(
+        (lang_info["audio_langs"] | lang_info["subtitle_langs"]) & ALLOWED_LANGS
+    )
+
+    if language_tags_present:
+        audio_langs = ", ".join(sorted(lang_info["audio_langs"])) or "-"
+        subtitle_langs = ", ".join(sorted(lang_info["subtitle_langs"])) or "-"
+        note_unknown = " + Spuren ohne Tag" if lang_info["has_unknown"] else ""
+        print(
+            f"🗣 Sprach-Tags erkannt: Audio [{audio_langs}], "
+            f"Subs [{subtitle_langs}]{note_unknown}"
+        )
+
+        if allowed_present:
+            profile_path = build_language_profile(ALLOWED_LANGS)
+            print(f"✅ Sprach-Whitelist aktiv (DE/EN) via {profile_path.name}")
+        else:
+            print("⚠ Keine DE/EN-Spuren gefunden – rippe ohne Filter.")
+    else:
+        print(
+            "⚠ Keine Sprach-Tags in MakeMKV info – alle Audio/Subtitle-Spuren "
+            "werden behalten."
+        )
+
     titles = parse_titles(info_text)
 
     if not titles:
@@ -424,17 +543,16 @@ def main():
             tmp_dir.mkdir(parents=True, exist_ok=True)
 
             print(f"🎬 Ripping movie title {tid} → {movie_output} (tmp {tmp_dir.name})")
-            run(
-                [
-                    "makemkvcon",
-                    "--noscan",
-                    "-r",
-                    "mkv",
-                    disc_target,
-                    str(tid),
-                    str(tmp_dir),
-                ]
-            )
+            cmd = [
+                "makemkvcon",
+                "--noscan",
+                "-r",
+                "mkv",
+            ]
+            if profile_path:
+                cmd += ["--profile", str(profile_path)]
+            cmd += [disc_target, str(tid), str(tmp_dir)]
+            run(cmd)
 
             newest = newest_mkv(tmp_dir)
             if newest is None:
@@ -465,17 +583,16 @@ def main():
                 continue
 
             print(f"🎬 Ripping title {tid} → {out_file}")
-            run(
-                [
-                    "makemkvcon",
-                    "--noscan",
-                    "-r",
-                    "mkv",
-                    disc_target,
-                    str(tid),
-                    str(outdir),
-                ]
-            )
+            cmd = [
+                "makemkvcon",
+                "--noscan",
+                "-r",
+                "mkv",
+            ]
+            if profile_path:
+                cmd += ["--profile", str(profile_path)]
+            cmd += [disc_target, str(tid), str(outdir)]
+            run(cmd)
 
             # MakeMKV nennt die Datei meist anders (B1_t00.mkv).
             # Wir benennen nachträglich um:
@@ -533,4 +650,10 @@ if __name__ == "__main__":
         sys.exit(130)
     except Exception as e:
         print("❌ ERROR:", e)
+    finally:
+        if profile_path and profile_path.exists():
+            try:
+                profile_path.unlink()
+            except Exception:
+                pass
         sys.exit(1)
