@@ -15,7 +15,7 @@ def base_without_clean(path: Path) -> Path:
     return path
 
 
-def process_file(mkv: Path, dry_run=False):
+def process_file(mkv: Path, dry_run=False, force=False):
     # bereits bereinigte Dateien überspringen
     if mkv.stem.endswith("_clean"):
         print(f"⏭  Übersprungen (bereits clean): {mkv.name}")
@@ -72,16 +72,25 @@ def process_file(mkv: Path, dry_run=False):
     if not dry_run:
         subprocess.run(cmd, check=True)
 
-    print(f"✔ Fertig: {out_file.name}\n")
+    print(f"✔ Fertig: {out_file.name}")
+
+    if force:
+        print(f"⤴ Ersetze Original mit Clean-Version: {out_file.name} → {mkv.name}")
+        if not dry_run:
+            out_file.replace(mkv)
+        print(f"✅ Done\n")
+    else:
+        print()
 
 
-def promote_clean(path: Path, dry_run=False):
+def promote_clean(path: Path, dry_run=False, recursive: bool = False):
     """
     Macht:
       file_clean.mkv → file.mkv
       vorhandene file.mkv wird überschrieben
     """
-    for clean in sorted(path.glob("*_clean.mkv")):
+    iterator = path.rglob("*_clean.mkv") if recursive else path.glob("*_clean.mkv")
+    for clean in sorted(iterator):
         target = base_without_clean(clean)
 
         # Falls schon clean umbenannt wurde → nichts tun
@@ -95,18 +104,18 @@ def promote_clean(path: Path, dry_run=False):
             print(f"⚠️  Überschreibe bestehende Datei: {target.name}")
 
         if not dry_run:
-            # Erst neue Datei platzieren, dann alte überschreiben
             clean.replace(target)
 
 
-def iter_targets(path: Path):
+def iter_targets(path: Path, recursive: bool = False):
     if path.is_file():
         if path.suffix.lower() == ".mkv":
             yield path
         else:
             print(f"⚠️  Ignoriert (kein .mkv): {path}")
     elif path.is_dir():
-        for mkv in sorted(path.glob("*.mkv")):
+        iterator = path.rglob("*.mkv") if recursive else path.glob("*.mkv")
+        for mkv in sorted(iterator):
             yield mkv
     else:
         print(f"❌ Pfad existiert nicht: {path}")
@@ -127,18 +136,38 @@ def main():
     )
 
     parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Nach erfolgreichem Clean das Original sofort ersetzen (kein separater Promote-Schritt nötig)",
+    )
+
+    parser.add_argument(
         "--dry-run", action="store_true", help="Nur anzeigen, nichts ausführen"
+    )
+
+    parser.add_argument(
+        "-r",
+        "--recursive",
+        action="store_true",
+        help="Verzeichnisse rekursiv durchsuchen",
     )
 
     args = parser.parse_args()
     path = Path(args.path)
 
+    if args.promote and args.force:
+        parser.error("Bitte entweder --promote oder --force verwenden, nicht beides.")
+
     if args.promote:
-        promote_clean(path if path.is_dir() else path.parent, dry_run=args.dry_run)
+        promote_clean(
+            path if path.is_dir() else path.parent,
+            dry_run=args.dry_run,
+            recursive=args.recursive,
+        )
         return
 
-    for mkv in iter_targets(path):
-        process_file(mkv, dry_run=args.dry_run)
+    for mkv in iter_targets(path, recursive=args.recursive):
+        process_file(mkv, dry_run=args.dry_run, force=args.force)
 
 
 if __name__ == "__main__":

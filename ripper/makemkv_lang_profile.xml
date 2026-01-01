@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<profiles>
+  <profile name="codex-lang-filter">
+    <app_DefaultSelectionString>
+-sel:all
++sel:video
++sel:(audio&amp;(eng|deu|ger))
++sel:(subtitle&amp;(eng|deu|ger))
+    </app_DefaultSelectionString>
+  </profile>
+</profiles>
