@@ -19,7 +19,7 @@ import shutil
 import unicodedata
 from pathlib import Path
 
-import paho.mqtt.client as mqtt  # type: ignore
+import paho.mqtt.client as mqtt
 
 MQTT_PAYLOAD_VERSION = 2
 try:  # Python 3.11+ ships tomllib, tomli is fallback for older versions
@@ -109,13 +109,6 @@ class FileLock:
 # TINFO-Zeilen sehen z.B. so aus:
 # TINFO:0,9,0,"0:43:31"
 TINFO_RE = re.compile(r'^TINFO:(?P<title>\d+),(?P<key>\d+),\d+,"(?P<value>.*)"$')
-SINFO_RE = re.compile(
-    r'^SINFO:(?P<title>\d+),(?P<track>\d+),(?P<key>\d+),\d+,"(?P<value>.*)"$'
-)
-
-
-ALLOWED_LANGS = {"de", "deu", "ger", "en", "eng"}
-PROFILE_LANGS = ("eng", "deu", "ger")
 
 
 def parse_duration_to_minutes(dur: str) -> int:
@@ -178,92 +171,6 @@ def parse_titles(info_text: str):
 
     # nach Titel-ID sortieren (stabil, nachvollziehbar)
     return sorted(result, key=lambda x: x["title_id"])
-
-
-def extract_language_tags(info_text: str):
-    """
-    Prüft SINFO-Zeilen auf Sprachkennungen.
-    Liefert:
-    {
-        "audio_langs": set[str],
-        "subtitle_langs": set[str],
-        "has_tags": bool,   # mindestens eine Spur hat ein Sprach-Tag
-        "has_unknown": bool # mindestens eine Spur ohne Sprach-Tag
-    }
-    """
-    tracks = {}
-    for line in info_text.splitlines():
-        m = SINFO_RE.match(line)
-        if not m:
-            continue
-        tid = int(m.group("title"))
-        track = int(m.group("track"))
-        key = int(m.group("key"))
-        value = m.group("value")
-        tracks.setdefault((tid, track), {})[key] = value
-
-    audio_langs = set()
-    subtitle_langs = set()
-    has_tags = False
-    has_unknown = False
-
-    for meta in tracks.values():
-        track_type = meta.get(1)
-        if track_type not in ("Audio", "Subtitles"):
-            continue
-        lang = normalize_language(meta.get(3) or meta.get(4))
-        if lang:
-            has_tags = True
-            if track_type == "Audio":
-                audio_langs.add(lang)
-            else:
-                subtitle_langs.add(lang)
-        else:
-            has_unknown = True
-
-    return {
-        "audio_langs": audio_langs,
-        "subtitle_langs": subtitle_langs,
-        "has_tags": has_tags,
-        "has_unknown": has_unknown,
-    }
-
-
-def normalize_language(lang_raw):
-    """
-    Normalisiert Sprachcodes auf einen einfachen Vergleichswert.
-    """
-    if lang_raw is None:
-        return None
-    lang = str(lang_raw).strip().lower()
-    if not lang:
-        return None
-    return lang.split("-")[0]  # IETF-Codes wie de-DE auf den Prefix kürzen
-
-
-def get_language_profile(allowed_langs: set[str]) -> Path:
-    """
-    Stellt ein persistentes MakeMKV-Profil bereit, das nur die erlaubten Sprachen auswählt.
-    """
-    # MakeMKV DefaultSelectionString-Syntax nutzt Kurzsprachen ohne Prefix.
-    # Strikte Auswahl: nur Video + Audio/Subtitles in eng/deu/ger.
-    lang_or = "|".join(PROFILE_LANGS)
-    profile_xml = f"""<?xml version="1.0" encoding="UTF-8"?>
-<profiles>
-  <profile name="codex-lang-filter">
-    <app_DefaultSelectionString>
--sel:all
-+sel:video
-+sel:(audio&amp;({lang_or}))
-+sel:(subtitle&amp;({lang_or}))
-    </app_DefaultSelectionString>
-  </profile>
-</profiles>
-"""
-    profile_path = Path(__file__).with_name("makemkv_lang_profile.xml")
-    # Schreibe jedes Mal, um Syntax-Anpassungen sicher zu verteilen.
-    profile_path.write_text(profile_xml)
-    return profile_path
 
 
 def sanitize_movie_name(name: str) -> str:
@@ -442,223 +349,180 @@ def main():
     max_episode_minutes = (
         None if movie_mode else config["heuristics"].get("max_episode_minutes")
     )
-    profile_path = None
 
-    try:
-        print("🔌 Checking MQTT connectivity…")
-        mqtt_ok = mqtt_test_connection(mqtt_config)
+    print("🔌 Checking MQTT connectivity…")
+    mqtt_ok = mqtt_test_connection(mqtt_config)
 
-        if not mqtt_ok:
-            print("⚠ MQTT not available – ripping will continue without notification")
+    if not mqtt_ok:
+        print("⚠ MQTT not available – ripping will continue without notification")
 
-        if movie_mode:
-            movie_name_raw = args.movie_name.strip()
-            movie_name = sanitize_movie_name(movie_name_raw)
-            outdir = (base_raw / movie_subpath).resolve()
-            info_file = outdir / f"{movie_name}.info"
-            movie_output = outdir / f"{movie_name}.mkv"
-            tmp_dir = outdir / f"{movie_name}.tmp{secrets.token_hex(2)}"
-        else:
-            outdir = (
-                base_raw / series_subpath / args.series / f"S{args.season}" / args.disc
-            ).resolve()
-            info_file = outdir / f"{args.disc}.info"
-            tmp_dir = None
-        outdir.mkdir(parents=True, exist_ok=True)
-        payload_files = []
+    if movie_mode:
+        movie_name_raw = args.movie_name.strip()
+        movie_name = sanitize_movie_name(movie_name_raw)
+        outdir = (base_raw / movie_subpath).resolve()
+        info_file = outdir / f"{movie_name}.info"
+        movie_output = outdir / f"{movie_name}.mkv"
+        tmp_dir = outdir / f"{movie_name}.tmp{secrets.token_hex(2)}"
+    else:
+        outdir = (
+            base_raw / series_subpath / args.series / f"S{args.season}" / args.disc
+        ).resolve()
+        info_file = outdir / f"{args.disc}.info"
+        tmp_dir = None
+    outdir.mkdir(parents=True, exist_ok=True)
+    payload_files = []
 
-        print(f"📀 Analyzing source via {source_label}…")
-        info_text = run(["makemkvcon", "--noscan", "-r", "info", disc_target])
-        info_file.write_text(info_text)
+    print(f"📀 Analyzing source via {source_label}…")
+    info_text = run(["makemkvcon", "--noscan", "-r", "info", disc_target])
+    info_file.write_text(info_text)
 
-        lang_info = extract_language_tags(info_text)
-        language_tags_present = lang_info["has_tags"]
-        allowed_present = bool(
-            (lang_info["audio_langs"] | lang_info["subtitle_langs"]) & ALLOWED_LANGS
+    titles = parse_titles(info_text)
+
+    if not titles:
+        print("⚠ Keine TINFO-Titel mit Dauer gefunden.")
+        return
+
+    # Episoden-Heuristik
+    usable = [
+        t
+        for t in titles
+        if (
+            t["minutes"] >= min_episode_minutes
+            and (max_episode_minutes is None or t["minutes"] <= max_episode_minutes)
         )
+    ]
 
-        if language_tags_present:
-            audio_langs = ", ".join(sorted(lang_info["audio_langs"])) or "-"
-            subtitle_langs = ", ".join(sorted(lang_info["subtitle_langs"])) or "-"
-            note_unknown = " + Spuren ohne Tag" if lang_info["has_unknown"] else ""
-            print(
-                f"🗣 Sprach-Tags erkannt: Audio [{audio_langs}], "
-                f"Subs [{subtitle_langs}]{note_unknown}"
-            )
+    if not usable:
+        print("⚠ No episode-sized titles found.")
+        print("   Gefundene Titel-Dauern:")
+        for t in titles:
+            print(f"   - title {t['title_id']}: {t['minutes']} min ({t['duration']})")
+        return
 
-            if allowed_present:
-                profile_path = get_language_profile(ALLOWED_LANGS)
-                print(f"✅ Sprach-Whitelist aktiv (DE/EN) via {profile_path.name}")
-            else:
-                print("⚠ Keine DE/EN-Spuren gefunden – rippe ohne Filter.")
-        else:
-            print(
-                "⚠ Keine Sprach-Tags in MakeMKV info – alle Audio/Subtitle-Spuren "
-                "werden behalten."
-            )
+    print("📋 Gefundene 'episodenartige' Titel:")
+    for t in usable:
+        print(f"   - title {t['title_id']}: {t['minutes']} min ({t['duration']})")
 
-        titles = parse_titles(info_text)
-
-        if not titles:
-            print("⚠ Keine TINFO-Titel mit Dauer gefunden.")
-            return
-
-        # Episoden-Heuristik
-        usable = [
-            t
-            for t in titles
-            if (
-                t["minutes"] >= min_episode_minutes
-                and (max_episode_minutes is None or t["minutes"] <= max_episode_minutes)
-            )
-        ]
-
-        if not usable:
-            print("⚠ No episode-sized titles found.")
-            print("   Gefundene Titel-Dauern:")
-            for t in titles:
-                print(
-                    f"   - title {t['title_id']}: {t['minutes']} min ({t['duration']})"
-                )
-            return
-
-        print("📋 Gefundene 'episodenartige' Titel:")
-        for t in usable:
+    usable_ids = {t["title_id"] for t in usable}
+    ignored = [t for t in titles if t["title_id"] not in usable_ids]
+    if ignored:
+        print("▶ Folgende Titel werden ignoriert (min/max length):")
+        for t in ignored:
             print(f"   - title {t['title_id']}: {t['minutes']} min ({t['duration']})")
 
-        usable_ids = {t["title_id"] for t in usable}
-        ignored = [t for t in titles if t["title_id"] not in usable_ids]
-        if ignored:
-            print("▶ Folgende Titel werden ignoriert (min/max length):")
-            for t in ignored:
-                print(
-                    f"   - title {t['title_id']}: {t['minutes']} min ({t['duration']})"
-                )
+    print("⏳ Warte 2 Sekunden – STRG+C zum Abbrechen…")
+    time.sleep(2)
 
-        print("⏳ Warte 2 Sekunden – STRG+C zum Abbrechen…")
-        time.sleep(2)
-
-        if movie_mode:
-            if movie_output.exists():
-                print(f"⏭ {movie_output.name} existiert bereits, überspringe Ripping")
-                episodes_ripped = 0
-            else:
-                movie_title = max(usable, key=lambda t: (t["minutes"], -t["title_id"]))
-                tid = movie_title["title_id"]
-
-                tmp_dir.mkdir(parents=True, exist_ok=True)
-
-                print(
-                    f"🎬 Ripping movie title {tid} → {movie_output} (tmp {tmp_dir.name})"
-                )
-                cmd = [
-                    "makemkvcon",
-                    "--noscan",
-                    "-r",
-                    "mkv",
-                ]
-                if profile_path:
-                    cmd += ["--profile", str(profile_path)]
-                cmd += [disc_target, str(tid), str(tmp_dir)]
-                run(cmd)
-
-                newest = newest_mkv(tmp_dir)
-                if newest is None:
-                    raise RuntimeError("MakeMKV hat keine MKV-Datei erzeugt.")
-                if movie_output.exists():
-                    print(
-                        f"⚠ Ziel erschien während des Rippens, lasse neue Datei unbenannt: {newest}"
-                    )
-                    episodes_ripped = 0
-                else:
-                    newest.rename(movie_output)
-                    episodes_ripped = 1
-                shutil.rmtree(tmp_dir, ignore_errors=True)
-            payload_files.append(movie_output)
-
+    if movie_mode:
+        if movie_output.exists():
+            print(f"⏭ {movie_output.name} existiert bereits, überspringe Ripping")
+            episodes_ripped = 0
         else:
-            episode = args.episode_start
+            movie_title = max(usable, key=lambda t: (t["minutes"], -t["title_id"]))
+            tid = movie_title["title_id"]
 
-            for t in usable:
-                tid = t["title_id"]
-                filename = f"{args.series}-S{args.season}E{episode:02d}.mkv"
-                out_file = outdir / filename
-                payload_files.append(out_file)
+            tmp_dir.mkdir(parents=True, exist_ok=True)
 
-                if out_file.exists():
-                    print(f"⏭ Datei existiert bereits, überspringe: {out_file}")
-                    episode += 1
-                    continue
-
-                print(f"🎬 Ripping title {tid} → {out_file}")
-                cmd = [
+            print(f"🎬 Ripping movie title {tid} → {movie_output} (tmp {tmp_dir.name})")
+            run(
+                [
                     "makemkvcon",
                     "--noscan",
                     "-r",
                     "mkv",
+                    disc_target,
+                    str(tid),
+                    str(tmp_dir),
                 ]
-                if profile_path:
-                    cmd += ["--profile", str(profile_path)]
-                cmd += [disc_target, str(tid), str(outdir)]
-                run(cmd)
-
-                # MakeMKV nennt die Datei meist anders (B1_t00.mkv).
-                # Wir benennen nachträglich um:
-                # finde die neueste MKV in outdir und verschiebe sie auf unseren Zielnamen.
-                newest = newest_mkv(outdir)
-                if newest is None:
-                    raise RuntimeError("MakeMKV hat keine MKV-Datei erzeugt.")
-                if out_file.exists():
-                    print(
-                        f"⚠ Ziel erschien während des Rippens, lasse neue Datei unbenannt: {newest}"
-                    )
-                elif newest != out_file:
-                    newest.rename(out_file)
-
-                episode += 1
-
-            episodes_ripped = episode - args.episode_start
-            last_episode = episode - 1
-            print(
-                f"📺 Letzte Episoden-Nr.: {last_episode:02d} | "
-                f"Nächste freie Episoden-Nr.: {episode:02d}"
             )
 
-        hostname = socket.gethostname().split(".")[0]
+            newest = newest_mkv(tmp_dir)
+            if newest is None:
+                raise RuntimeError("MakeMKV hat keine MKV-Datei erzeugt.")
+            if movie_output.exists():
+                print(
+                    f"⚠ Ziel erschien während des Rippens, lasse neue Datei unbenannt: {newest}"
+                )
+                episodes_ripped = 0
+            else:
+                newest.rename(movie_output)
+                episodes_ripped = 1
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+        payload_files.append(movie_output)
 
-        payload = {
-            "episodes": episodes_ripped,
-            "hostname": hostname,
-            "timestamp": int(time.time()),
-            "mode": "movie" if movie_mode else "series",
-            "version": MQTT_PAYLOAD_VERSION,
-            "files": [str(p.resolve()) for p in payload_files],
-        }
+    else:
+        episode = args.episode_start
 
-        if movie_mode:
-            payload["series"] = movie_name
-            payload["season"] = "00"
-            payload["disc"] = movie_name
-            payload["movie_name"] = movie_name
-        else:
-            payload["series"] = args.series
-            payload["season"] = args.season
-            payload["disc"] = args.disc
+        for t in usable:
+            tid = t["title_id"]
+            filename = f"{args.series}-S{args.season}E{episode:02d}.mkv"
+            out_file = outdir / filename
+            payload_files.append(out_file)
 
-        if not iso_mode:
-            print("⏏ Ejecting disc…")
-            subprocess.run(["eject", device], check=False)
+            if out_file.exists():
+                print(f"⏭ Datei existiert bereits, überspringe: {out_file}")
+                episode += 1
+                continue
 
-        print("📡 Publishing MQTT event…")
-        mqtt_publish(mqtt_config, payload)
+            print(f"🎬 Ripping title {tid} → {out_file}")
+            run(
+                [
+                    "makemkvcon",
+                    "--noscan",
+                    "-r",
+                    "mkv",
+                    disc_target,
+                    str(tid),
+                    str(outdir),
+                ]
+            )
 
-        print("✅ Done.")
-    finally:
-        if profile_path and profile_path.exists():
-            try:
-                profile_path.unlink()
-            except Exception:
-                pass
+            # MakeMKV nennt die Datei meist anders (B1_t00.mkv).
+            # Wir benennen nachträglich um:
+            # finde die neueste MKV in outdir und verschiebe sie auf unseren Zielnamen.
+            newest = newest_mkv(outdir)
+            if newest is None:
+                raise RuntimeError("MakeMKV hat keine MKV-Datei erzeugt.")
+            if out_file.exists():
+                print(
+                    f"⚠ Ziel erschien während des Rippens, lasse neue Datei unbenannt: {newest}"
+                )
+            elif newest != out_file:
+                newest.rename(out_file)
+
+            episode += 1
+
+        episodes_ripped = episode - args.episode_start
+
+    hostname = socket.gethostname().split(".")[0]
+
+    payload = {
+        "episodes": episodes_ripped,
+        "hostname": hostname,
+        "timestamp": int(time.time()),
+        "mode": "movie" if movie_mode else "series",
+        "version": MQTT_PAYLOAD_VERSION,
+        "files": [str(p.resolve()) for p in payload_files],
+    }
+
+    if movie_mode:
+        payload["series"] = movie_name
+        payload["season"] = "00"
+        payload["disc"] = movie_name
+        payload["movie_name"] = movie_name
+    else:
+        payload["series"] = args.series
+        payload["season"] = args.season
+        payload["disc"] = args.disc
+
+    if not iso_mode:
+        print("⏏ Ejecting disc…")
+        subprocess.run(["eject", device], check=False)
+
+    print("📡 Publishing MQTT event…")
+    mqtt_publish(mqtt_config, payload)
+
+    print("✅ Done.")
 
 
 if __name__ == "__main__":
