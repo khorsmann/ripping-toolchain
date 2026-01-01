@@ -493,6 +493,11 @@ def main():
             episode += 1
 
         episodes_ripped = episode - args.episode_start
+        last_episode = episode - 1
+        print(
+            f"📺 Letzte Episoden-Nr.: {last_episode:02d} | "
+            f"Nächste freie Episoden-Nr.: {episode:02d}"
+        )
 
     hostname = socket.gethostname().split(".")[0]
 
