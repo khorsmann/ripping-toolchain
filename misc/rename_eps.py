@@ -27,8 +27,8 @@ def collect_renames(base: Path, offset: int):
 
         renames.append((ep, f, f.with_name(new_name)))
 
-    # höhere Episoden zuerst → verhindert Überschreiben
-    renames.sort(reverse=True, key=lambda x: x[0])
+    # Sort in direction that keeps targets free to avoid overwrites
+    renames.sort(reverse=offset >= 0, key=lambda x: x[0])
     return renames
 
 
