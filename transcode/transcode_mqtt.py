@@ -61,10 +61,10 @@ def probe_duration(path: Path) -> float | None:
         return None
 
 
-def vaapi_filter_for(path: Path) -> str | None:
+def detect_interlaced(path: Path) -> bool | None:
     """
-    Chooses VAAPI deinterlace step based on field_order.
-    Interlaced -> deinterlace_vaapi; progressive -> None.
+    Returns True if ffprobe reports an interlaced field_order, False if not,
+    None when detection fails.
     """
     try:
         out = subprocess.check_output(
@@ -85,16 +85,87 @@ def vaapi_filter_for(path: Path) -> str | None:
         field_order = out.strip().lower()
         interlaced = {"tt", "bb", "tb", "bt"}
         if field_order in interlaced:
-            logging.info(
-                "detected interlaced video (%s) for %s; applying deinterlace_vaapi",
-                field_order,
-                path,
-            )
-            return "deinterlace_vaapi"
+            logging.info("detected interlaced video (%s) for %s", field_order, path)
+            return True
+        if field_order:
+            return False
     except Exception as e:
-        logging.warning(
-            "ffprobe field_order failed for %s: %s; using default VAAPI filter", path, e
-        )
+        logging.warning("ffprobe field_order failed for %s: %s", path, e)
+    return None
+
+
+def probe_audio_channels(path: Path) -> int | None:
+    """
+    Returns channel count of the first audio stream, or None if unavailable.
+    """
+    try:
+        out = subprocess.check_output(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "a:0",
+                "-show_entries",
+                "stream=channels",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                str(path),
+            ],
+            stderr=subprocess.DEVNULL,
+        ).decode()
+        channels_raw = out.strip()
+        if not channels_raw:
+            return None
+        return int(channels_raw)
+    except Exception as e:
+        logging.warning("ffprobe audio channels failed for %s: %s", path, e)
+        return None
+
+
+def build_audio_args(channels: int | None, source_type: str) -> list[str]:
+    if channels is None:
+        bitrate = "640k" if source_type == "bluray" else "640k"
+        logging.info("audio channels unknown, using %s for EAC3", bitrate)
+    elif channels <= 2:
+        bitrate = "256k"
+    else:
+        bitrate = "768k" if source_type == "bluray" else "640k"
+
+    return [
+        "-c:a:0",
+        "eac3",
+        "-b:a:0",
+        bitrate,
+    ]
+
+
+def build_downmix_args() -> list[str]:
+    return [
+        "-c:a:1",
+        "aac",
+        "-b:a:1",
+        "192k",
+        "-ac:a:1",
+        "2",
+    ]
+
+
+def build_video_filter(interlaced: bool | None, hwupload: bool) -> str | None:
+    filters = []
+    if interlaced is True:
+        filters.append("bwdif")
+    if hwupload:
+        filters.append("format=p010le")
+        filters.append("hwupload=extra_hw_frames=64")
+    if not filters:
+        return None
+    return ",".join(filters)
+
+
+def build_sw_filter(interlaced: bool | None) -> str | None:
+    if interlaced is True:
+        return "bwdif"
     return None
 
 
@@ -126,8 +197,9 @@ MQTT_TOPIC_START = getenv("MQTT_TOPIC_START", "media/transcode/start")
 MQTT_TOPIC_DONE = getenv("MQTT_TOPIC_DONE", "media/transcode/done")
 MQTT_TOPIC_ERROR = getenv("MQTT_TOPIC_ERROR", "media/transcode/error")
 MQTT_PAYLOAD_VERSION = 3
-ENABLE_SW_FALLBACK = getenv_bool("ENABLE_SW_FALLBACK", "false")
+ENABLE_SW_FALLBACK = getenv_bool("ENABLE_SW_FALLBACK", "true")
 MAX_HW_RETRIES = max(0, int(getenv("MAX_HW_RETRIES", "2")))
+ENABLE_AAC_DOWNMIX = getenv_bool("ENABLE_AAC_DOWNMIX", "false")
 
 
 # --------------------
@@ -181,6 +253,7 @@ def transcode_dir(client, job: dict):
     src_dir = Path(job_path_raw).resolve() if job_path_raw else None
     mode = job.get("mode", "series")
     interlaced = job.get("interlaced")
+    source_type = job.get("source_type", "dvd")
     raw_files = job.get("files") or []
     explicit_files = [Path(p).expanduser().resolve() for p in raw_files]
 
@@ -230,8 +303,6 @@ def transcode_dir(client, job: dict):
         return
 
     did_work = False
-    multi_movie_titles = mode == "movie" and len(mkv_files) > 1
-
     for mkv in mkv_files:
         if mode == "movie":
             rel = None
@@ -280,81 +351,113 @@ def transcode_dir(client, job: dict):
             },
         )
 
-        # Build VAAPI filter chain:
-        # - Optional deinterlace (payload flag overrides auto-detect)
-        # - scale_vaapi to NV12 to match encoder expectations
         if interlaced is True:
-            deint = "deinterlace_vaapi"
+            interlaced_effective = True
         elif interlaced is False:
-            deint = None
+            interlaced_effective = False
         else:
-            deint = vaapi_filter_for(mkv)
-        vf_filter_base = (
-            "deinterlace_vaapi,scale_vaapi=format=nv12"
-            if deint
-            else "scale_vaapi=format=nv12"
-        )
+            interlaced_effective = detect_interlaced(mkv)
 
-        def build_hw_cmd(
-            with_ts_fix: bool, filter_str: str | None, add_color_metadata: bool
-        ) -> list[str]:
+        audio_channels = probe_audio_channels(mkv)
+        audio_args = build_audio_args(audio_channels, source_type)
+        add_downmix = ENABLE_AAC_DOWNMIX
+
+        maps = ["-map", "0:v:0", "-map", "0:a:0?", "-map", "0:s?"]
+        if add_downmix:
+            maps.extend(["-map", "0:a:0?"])
+
+        qsv_global_quality = 21 if source_type == "bluray" else 25
+        vaapi_qp = 22 if source_type == "bluray" else 26
+        x265_crf = 21 if source_type == "bluray" else 25
+
+        def build_qsv_cmd() -> list[str]:
+            cmd = [
+                "ffmpeg",
+                "-init_hw_device",
+                "qsv=hw:/dev/dri/renderD128",
+                "-filter_hw_device",
+                "hw",
+                "-i",
+                str(mkv),
+            ]
+            vf = build_video_filter(interlaced_effective, hwupload=True)
+            if vf:
+                cmd.extend(["-vf", vf])
+            cmd.extend(maps)
+            cmd.extend(
+                [
+                    "-c:v",
+                    "hevc_qsv",
+                    "-profile:v",
+                    "main10",
+                    "-global_quality",
+                    str(qsv_global_quality),
+                    "-pix_fmt",
+                    "p010le",
+                ]
+            )
+            cmd.extend(audio_args)
+            if add_downmix:
+                cmd.extend(build_downmix_args())
+            cmd.extend(["-c:s", "copy", str(out)])
+            return cmd
+
+        def build_vaapi_cmd() -> list[str]:
             cmd = [
                 "ffmpeg",
                 "-init_hw_device",
                 "vaapi=va:/dev/dri/renderD128",
                 "-filter_hw_device",
                 "va",
-                "-hwaccel_device",
-                "va",
-                "-hwaccel",
-                "vaapi",
-                "-hwaccel_output_format",
-                "vaapi",
+                "-i",
+                str(mkv),
             ]
-            # TODO: consider always adding -fflags +genpts -avoid_negative_ts make_zero here
-            # to smooth PTS and improve seeking (currently only applied on retries).
-            if with_ts_fix:
-                cmd.extend(
-                    [
-                        "-fflags",
-                        "+genpts",
-                        "-avoid_negative_ts",
-                        "make_zero",
-                    ]
-                )
-            cmd.extend(["-i", str(mkv)])
-            if add_color_metadata:
-                cmd.extend(
-                    [
-                        "-colorspace",
-                        "bt470bg",
-                        "-color_primaries",
-                        "smpte170m",
-                        "-color_trc",
-                        "smpte170m",
-                    ]
-                )
-            if filter_str:
-                cmd.extend(["-vf", filter_str])
+            vf = build_video_filter(interlaced_effective, hwupload=True)
+            if vf:
+                cmd.extend(["-vf", vf])
+            cmd.extend(maps)
             cmd.extend(
                 [
-                    "-map",
-                    "0:v:0",
-                    "-map",
-                    "0:a",
-                    "-map",
-                    "0:s?",
                     "-c:v",
                     "hevc_vaapi",
+                    "-profile:v",
+                    "main10",
                     "-qp",
-                    "22",
-                    "-c:a",
-                    "copy",
-                    "-c:s",
-                    "copy",
-                    str(out),
+                    str(vaapi_qp),
                 ]
             )
+            cmd.extend(audio_args)
+            if add_downmix:
+                cmd.extend(build_downmix_args())
+            cmd.extend(["-c:s", "copy", str(out)])
+            return cmd
+
+        def build_sw_cmd() -> list[str]:
+            cmd = [
+                "ffmpeg",
+                "-i",
+                str(mkv),
+            ]
+            vf = build_sw_filter(interlaced_effective)
+            if vf:
+                cmd.extend(["-vf", vf])
+            cmd.extend(maps)
+            cmd.extend(
+                [
+                    "-c:v",
+                    "libx265",
+                    "-preset",
+                    "slow",
+                    "-crf",
+                    str(x265_crf),
+                    "-pix_fmt",
+                    "yuv420p10le",
+                ]
+            )
+            cmd.extend(audio_args)
+            if add_downmix:
+                cmd.extend(build_downmix_args())
+            cmd.extend(["-c:s", "copy", str(out)])
             return cmd
 
         try:
@@ -365,53 +468,55 @@ def transcode_dir(client, job: dict):
                 fcntl.flock(lock, fcntl.LOCK_EX)
 
                 max_hw_retries = MAX_HW_RETRIES
-                for attempt in range(0, max_hw_retries + 1):
-                    # attempt 0: base filter; retries: base filter + TS fix + color metadata
-                    use_filter = vf_filter_base
-                    with_ts = attempt >= 1
-                    add_color_metadata = attempt >= 1
-                    cmd = build_hw_cmd(
-                        with_ts_fix=with_ts,
-                        filter_str=use_filter,
-                        add_color_metadata=add_color_metadata,
-                    )
-                    label = (
-                        "initial (base filter)"
-                        if attempt == 0
-                        else f"retry {attempt}/{max_hw_retries} (+color metadata)"
-                    )
-                    try:
-                        subprocess.run(cmd, check=True)
+                encoders = [
+                    ("qsv", build_qsv_cmd),
+                    ("vaapi", build_vaapi_cmd),
+                ]
+
+                for encoder_label, cmd_builder in encoders:
+                    for attempt in range(0, max_hw_retries + 1):
+                        cmd = cmd_builder()
+                        label = (
+                            f"{encoder_label} initial"
+                            if attempt == 0
+                            else f"{encoder_label} retry {attempt}/{max_hw_retries}"
+                        )
+                        logging.info("running ffmpeg with encoder %s", encoder_label)
+                        try:
+                            subprocess.run(cmd, check=True)
+                            hw_failed = False
+                            break
+                        except (CalledProcessError, FileNotFoundError) as e:
+                            if out.exists():
+                                try:
+                                    out.unlink()
+                                except OSError as cleanup_err:
+                                    logging.warning(
+                                        "could not remove incomplete output %s: %s",
+                                        out,
+                                        cleanup_err,
+                                    )
+                            if attempt >= max_hw_retries:
+                                logging.warning(
+                                    "ffmpeg %s failed (%s) for %s -> %s; trying next encoder",
+                                    label,
+                                    getattr(e, "returncode", "error"),
+                                    mkv,
+                                    out,
+                                )
+                            else:
+                                logging.warning(
+                                    "ffmpeg %s failed (%s) for %s -> %s; retrying...",
+                                    label,
+                                    getattr(e, "returncode", "error"),
+                                    mkv,
+                                    out,
+                                )
+                                continue
+                    if out.exists():
                         hw_failed = False
                         break
-                    except CalledProcessError as e:
-                        if out.exists():
-                            try:
-                                out.unlink()
-                            except OSError as cleanup_err:
-                                logging.warning(
-                                    "could not remove incomplete output %s: %s",
-                                    out,
-                                    cleanup_err,
-                                )
-                        if attempt >= max_hw_retries:
-                            logging.warning(
-                                "ffmpeg %s failed (rc=%s) for %s -> %s; will fall back to software transcode",
-                                label,
-                                e.returncode,
-                                mkv,
-                                out,
-                            )
-                            hw_failed = True
-                            break
-                        else:
-                            logging.warning(
-                                "ffmpeg %s failed (rc=%s) for %s -> %s; retrying...",
-                                label,
-                                e.returncode,
-                                mkv,
-                                out,
-                            )
+                    hw_failed = True
 
             if hw_failed:
                 if not ENABLE_SW_FALLBACK:
@@ -441,26 +546,7 @@ def transcode_dir(client, job: dict):
                             cleanup_err,
                         )
 
-                sw_cmd = [
-                    "ffmpeg",
-                    "-i",
-                    str(mkv),
-                    "-map",
-                    "0:v:0",
-                    "-map",
-                    "0:a",
-                    "-map",
-                    "0:s?",
-                    "-c:v",
-                    "libx265",
-                    "-crf",
-                    "22",
-                    "-c:a",
-                    "copy",
-                    "-c:s",
-                    "copy",
-                    str(out),
-                ]
+                sw_cmd = build_sw_cmd()
                 subprocess.run(sw_cmd, check=True)
 
             in_duration = probe_duration(mkv)
