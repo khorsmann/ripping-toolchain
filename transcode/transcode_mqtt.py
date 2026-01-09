@@ -125,7 +125,7 @@ MQTT_SSL = getenv_bool("MQTT_SSL", "false")
 MQTT_TOPIC_START = getenv("MQTT_TOPIC_START", "media/transcode/start")
 MQTT_TOPIC_DONE = getenv("MQTT_TOPIC_DONE", "media/transcode/done")
 MQTT_TOPIC_ERROR = getenv("MQTT_TOPIC_ERROR", "media/transcode/error")
-MQTT_PAYLOAD_VERSION = 2
+MQTT_PAYLOAD_VERSION = 3
 ENABLE_SW_FALLBACK = getenv_bool("ENABLE_SW_FALLBACK", "false")
 MAX_HW_RETRIES = max(0, int(getenv("MAX_HW_RETRIES", "2")))
 
@@ -180,7 +180,7 @@ def transcode_dir(client, job: dict):
     job_path_raw = job.get("path")
     src_dir = Path(job_path_raw).resolve() if job_path_raw else None
     mode = job.get("mode", "series")
-    movie_name = job.get("movie_name")
+    interlaced = job.get("interlaced")
     raw_files = job.get("files") or []
     explicit_files = [Path(p).expanduser().resolve() for p in raw_files]
 
@@ -234,18 +234,15 @@ def transcode_dir(client, job: dict):
 
     for mkv in mkv_files:
         if mode == "movie":
-            if movie_name and not multi_movie_titles:
-                out = MOVIE_DST_BASE / f"{movie_name}{mkv.suffix}"
-            else:
-                rel = None
-                if src_root:
-                    try:
-                        rel = mkv.relative_to(src_root)
-                    except ValueError:
-                        rel = None
-                if rel is None:
-                    rel = mkv.name
-                out = MOVIE_DST_BASE / rel
+            rel = None
+            if src_root:
+                try:
+                    rel = mkv.relative_to(src_root)
+                except ValueError:
+                    rel = None
+            if rel is None:
+                rel = mkv.name
+            out = MOVIE_DST_BASE / rel
         else:
             try:
                 rel = mkv.relative_to(SERIES_SRC_BASE)
@@ -284,9 +281,14 @@ def transcode_dir(client, job: dict):
         )
 
         # Build VAAPI filter chain:
-        # - Optional deinterlace
+        # - Optional deinterlace (payload flag overrides auto-detect)
         # - scale_vaapi to NV12 to match encoder expectations
-        deint = vaapi_filter_for(mkv)
+        if interlaced is True:
+            deint = "deinterlace_vaapi"
+        elif interlaced is False:
+            deint = None
+        else:
+            deint = vaapi_filter_for(mkv)
         vf_filter_base = (
             "deinterlace_vaapi,scale_vaapi=format=nv12"
             if deint
@@ -509,7 +511,7 @@ def worker_loop(client: mqtt.Client, job_queue: queue.Queue):
         job = job_queue.get()
         try:
             if isinstance(job, Path):
-                job = {"path": str(job.resolve()), "mode": "series", "movie_name": None}
+                job = {"path": str(job.resolve()), "mode": "series"}
             logging.info(f"processing queued job for {job.get('path')}")
             transcode_dir(client, job)
         except Exception:
@@ -526,9 +528,25 @@ def on_message(client, userdata, msg):
         payload = json.loads(msg.payload.decode())
 
         version = payload.get("version")
+        if not isinstance(version, int):
+            logging.warning(
+                "payload has invalid version '%s', expected %s",
+                version,
+                MQTT_PAYLOAD_VERSION,
+            )
+            return
+        if version < MQTT_PAYLOAD_VERSION:
+            logging.warning(
+                "unsupported payload version %s, expected %s",
+                version,
+                MQTT_PAYLOAD_VERSION,
+            )
+            return
         if version != MQTT_PAYLOAD_VERSION:
             logging.warning(
-                f"unsupported payload version {version}, expected {MQTT_PAYLOAD_VERSION}"
+                "unsupported payload version %s, expected %s",
+                version,
+                MQTT_PAYLOAD_VERSION,
             )
             return
 
@@ -542,16 +560,27 @@ def on_message(client, userdata, msg):
         files_raw = payload.get("files")
         files = []
         if not isinstance(files_raw, list) or not files_raw:
-            logging.warning("v2 payload requires non-empty 'files' list, skipping")
+            logging.warning("payload requires non-empty 'files' list, skipping")
             return
         files = [str(Path(file_path).expanduser().resolve()) for file_path in files_raw]
 
         mode = payload.get("mode", "series")
-        movie_name = payload.get("movie_name")
+        if mode not in {"movie", "series"}:
+            logging.warning("payload has invalid mode '%s', skipping", mode)
+            return
+        source_type = payload.get("source_type")
+        if source_type not in {"dvd", "bluray"}:
+            logging.warning("payload has invalid source_type '%s', skipping", source_type)
+            return
+        interlaced = payload.get("interlaced")
+        if interlaced is not None and not isinstance(interlaced, bool):
+            logging.warning("payload has invalid interlaced flag '%s', skipping", interlaced)
+            return
 
         logging.info(
-            "MQTT job received (mode=%s, path=%s, files=%d)",
+            "MQTT job received (mode=%s, source_type=%s, path=%s, files=%d)",
             mode,
+            source_type,
             path,
             len(files),
         )
@@ -563,8 +592,9 @@ def on_message(client, userdata, msg):
             {
                 "path": str(path) if path else None,
                 "mode": mode,
-                "movie_name": movie_name,
+                "source_type": source_type,
                 "files": files,
+                "interlaced": interlaced,
             }
         )
 

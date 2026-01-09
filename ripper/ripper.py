@@ -21,7 +21,7 @@ from pathlib import Path
 
 import paho.mqtt.client as mqtt
 
-MQTT_PAYLOAD_VERSION = 2
+MQTT_PAYLOAD_VERSION = 3
 try:  # Python 3.11+ ships tomllib, tomli is fallback for older versions
     import tomllib
 except ModuleNotFoundError:  # pragma: no cover - tomli only if tomllib missing
@@ -50,6 +50,10 @@ def load_config(path: Path) -> dict:
         raise ValueError(f"Missing config sections: {', '.join(missing)}")
 
     data["storage"]["base_raw"] = Path(data["storage"]["base_raw"])
+    device_type = str(data["dvd"].get("type", "dvd")).strip().lower()
+    if device_type not in {"dvd", "bluray"}:
+        raise ValueError("dvd.type must be either 'dvd' or 'bluray'")
+    data["dvd"]["type"] = device_type
     series_path = data["storage"].get("series_path", "Serien")
     series_subpath = Path(series_path)
     if series_subpath.is_absolute():
@@ -312,6 +316,11 @@ def main():
     ap.add_argument(
         "--iso", help="ISO-Datei als Quelle verwenden (statt physischem Laufwerk)"
     )
+    ap.add_argument(
+        "--dvd",
+        action="store_true",
+        help="Bei Blu-ray-Laufwerk als DVD behandeln (überschreibt device type)",
+    )
 
     args = ap.parse_args()
     movie_mode = bool(args.movie_name and args.movie_name.strip())
@@ -332,6 +341,7 @@ def main():
     config = load_config(Path(args.config))
     mqtt_config = config["mqtt"]
     device = config["dvd"]["device"]
+    device_type = config["dvd"]["type"]
 
     if iso_mode:
         iso_path = Path(args.iso).expanduser()
@@ -343,6 +353,7 @@ def main():
         disc_target = dvd_device_to_disc_target(device)
         source_label = disc_target
     base_raw = config["storage"]["base_raw"].expanduser().resolve()
+    source_type = "dvd" if args.dvd else device_type
     series_subpath = config["storage"]["series_path"]
     movie_subpath = config["storage"]["movie_path"]
     min_episode_minutes = config["heuristics"]["min_episode_minutes"]
@@ -502,23 +513,13 @@ def main():
     hostname = socket.gethostname().split(".")[0]
 
     payload = {
-        "episodes": episodes_ripped,
-        "hostname": hostname,
-        "timestamp": int(time.time()),
-        "mode": "movie" if movie_mode else "series",
         "version": MQTT_PAYLOAD_VERSION,
+        "mode": "movie" if movie_mode else "series",
+        "source_type": source_type,
+        "path": str(outdir.resolve()),
         "files": [str(p.resolve()) for p in payload_files],
+        "interlaced": None,
     }
-
-    if movie_mode:
-        payload["series"] = movie_name
-        payload["season"] = "00"
-        payload["disc"] = movie_name
-        payload["movie_name"] = movie_name
-    else:
-        payload["series"] = args.series
-        payload["season"] = args.season
-        payload["disc"] = args.disc
 
     if not iso_mode:
         print("⏏ Ejecting disc…")

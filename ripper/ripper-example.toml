@@ -10,6 +10,10 @@ topic = "media/rip/done"
 
 [dvd]
 device = "/dev/sr0"
+type = "dvd"
+# bluray example:
+# device = "/dev/sr1"
+# type = "bluray"
 
 [storage]
 base_raw = "/path/to/raw/dvd/output"

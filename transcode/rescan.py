@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import re
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -23,7 +24,7 @@ from typing import Dict, List, Tuple
 
 import paho.mqtt.client as mqtt  # type: ignore
 
-MQTT_PAYLOAD_VERSION = 2
+MQTT_PAYLOAD_VERSION = 3
 TEMP_MKV_RE = re.compile(r"^[A-Za-z0-9]{2}_[A-Za-z][0-9]{2}\.mkv$", re.IGNORECASE)
 
 
@@ -43,6 +44,78 @@ def getenv_bool(name, default="false"):
 
 def is_temp_mkv(path: Path) -> bool:
     return bool(TEMP_MKV_RE.match(path.name))
+
+
+def parse_source_type(value: str) -> str | None:
+    if not value:
+        return None
+    cleaned = value.strip().lower()
+    if cleaned in {"dvd", "bluray"}:
+        return cleaned
+    return None
+
+
+def find_source_type_marker(start_dir: Path, stop_dir: Path) -> str | None:
+    """
+    Walks up from start_dir to stop_dir (inclusive) and checks for .source_type.
+    """
+    current = start_dir
+    stop_dir = stop_dir.resolve()
+    while True:
+        marker = current / ".source_type"
+        if marker.is_file():
+            try:
+                return parse_source_type(marker.read_text().strip())
+            except OSError as e:
+                logging.warning("failed to read %s: %s", marker, e)
+        if current == stop_dir or current.parent == current:
+            break
+        current = current.parent
+    return None
+
+
+def probe_source_type(path: Path) -> str | None:
+    """
+    Uses ffprobe height as a heuristic: <=576 -> dvd, >=720 -> bluray.
+    Returns None if detection fails.
+    """
+    try:
+        out = subprocess.check_output(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=height",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                str(path),
+            ],
+            stderr=subprocess.DEVNULL,
+        )
+        height_raw = out.decode().strip()
+        height = int(height_raw)
+    except Exception as e:
+        logging.warning("ffprobe height failed for %s: %s", path, e)
+        return None
+
+    if height <= 576:
+        return "dvd"
+    if height >= 720:
+        return "bluray"
+    return None
+
+
+def detect_source_type(start_dir: Path, stop_dir: Path, fallback: str, sample: Path) -> str:
+    marker = find_source_type_marker(start_dir, stop_dir)
+    if marker:
+        return marker
+    probed = probe_source_type(sample)
+    if probed:
+        return probed
+    return fallback
 
 
 def build_mqtt_client() -> mqtt.Client:
@@ -161,18 +234,6 @@ def collect_missing_movie_dirs(
     return missing, skipped
 
 
-def build_movie_name(
-    mkvs: List[Path], parent: Path, movie_src_base: Path
-) -> str | None:
-    """
-    Versucht einen movie_name zu bestimmen, falls genau eine Datei in der
-    Quell-Directory liegt und diese direkt unter movie_src_base abgelegt ist.
-    """
-    if len(mkvs) == 1 and parent == movie_src_base:
-        return mkvs[0].stem
-    return None
-
-
 def main():
     parser = argparse.ArgumentParser(
         description="Finde fehlende Transcodes und publiziere MQTT-Jobs"
@@ -208,6 +269,9 @@ def main():
     MQTT_SSL = getenv_bool("MQTT_SSL", "false")
 
     src_base = Path(getenv("SRC_BASE", required=True)).expanduser().resolve()
+    source_type_default = getenv("SOURCE_TYPE", "dvd").strip().lower()
+    if source_type_default not in {"dvd", "bluray"}:
+        raise RuntimeError("SOURCE_TYPE must be 'dvd' or 'bluray'")
 
     series_subpath = Path(getenv("SERIES_SUBPATH", "Serien"))
     if series_subpath.is_absolute():
@@ -268,22 +332,27 @@ def main():
     connect_mqtt(client)
 
     for src_dir, mkvs in sorted(series_dirs.items()):
+        source_type = detect_source_type(src_dir, src_base, source_type_default, mkvs[0])
         payload = {
             "version": MQTT_PAYLOAD_VERSION,
             "mode": "series",
+            "source_type": source_type,
+            "path": str(src_dir.resolve()),
             "files": [str(p.resolve()) for p in mkvs],
+            "interlaced": None,
         }
         mqtt_publish(client, MQTT_TOPIC, payload, args.dry_run)
 
     for parent, mkvs in sorted(movie_dirs.items()):
-        movie_name = build_movie_name(mkvs, parent, movie_src_base)
+        source_type = detect_source_type(parent, src_base, source_type_default, mkvs[0])
         payload = {
             "version": MQTT_PAYLOAD_VERSION,
             "mode": "movie",
+            "source_type": source_type,
+            "path": str(parent.resolve()),
             "files": [str(p.resolve()) for p in mkvs],
+            "interlaced": None,
         }
-        if movie_name:
-            payload["movie_name"] = movie_name
         mqtt_publish(client, MQTT_TOPIC, payload, args.dry_run)
 
     client.disconnect()
