@@ -177,6 +177,12 @@ def build_sw_filter(interlaced: bool | None) -> str | None:
     return None
 
 
+def build_qsv_filter(interlaced: bool | None) -> str | None:
+    if interlaced is True:
+        return "vpp_qsv=deinterlace=1"
+    return "vpp_qsv=deinterlace=0"
+
+
 # --------------------
 # Logging
 # --------------------
@@ -422,14 +428,16 @@ def transcode_dir(client, job: dict):
         def build_qsv_cmd() -> list[str]:
             cmd = [
                 FFMPEG_BIN,
-                "-init_hw_device",
-                "qsv=hw:/dev/dri/renderD128",
-                "-filter_hw_device",
-                "hw",
+                "-hwaccel",
+                "qsv",
+                "-qsv_device",
+                "/dev/dri/renderD128",
+                "-hwaccel_output_format",
+                "qsv",
                 "-i",
                 str(mkv),
             ]
-            vf = build_video_filter(interlaced_effective, hwupload=True)
+            vf = build_qsv_filter(interlaced_effective)
             if vf:
                 cmd.extend(["-vf", vf])
             cmd.extend(maps)
@@ -438,11 +446,11 @@ def transcode_dir(client, job: dict):
                     "-c:v",
                     "hevc_qsv",
                     "-profile:v",
-                    "main10",
+                    "main",
                     "-global_quality",
                     str(qsv_global_quality),
                     "-pix_fmt",
-                    "p010le",
+                    "nv12",
                 ]
             )
             cmd.extend(audio_args)

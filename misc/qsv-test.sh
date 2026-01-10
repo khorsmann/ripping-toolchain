@@ -32,12 +32,14 @@ echo "== ffmpeg hwaccels =="
 "${FFMPEG_BIN}" -hwaccels || true
 echo
 
-echo "== QSV smoke test =="
+echo "== QSV smoke test (progressive) =="
 set +e
 "${FFMPEG_BIN}" \
-  -init_hw_device qsv=hw:/dev/dri/renderD128 \
-  -filter_hw_device hw \
+  -hwaccel qsv \
+  -qsv_device /dev/dri/renderD128 \
+  -hwaccel_output_format qsv \
   -f lavfi -i testsrc2=size=1280x720:rate=30 \
+  -vf "vpp_qsv=deinterlace=0" \
   -t 2 \
   -c:v h264_qsv \
   -f null -
@@ -46,9 +48,34 @@ set -e
 
 if [[ $status -eq 0 ]]; then
   echo "RESULT: QSV OK"
-  exit 0
+else
+  echo "RESULT: QSV FAILED (exit ${status})"
+  echo "HINT: Check /dev/dri/renderD128 permissions and QSV runtime availability."
+fi
+echo
+
+echo "== QSV smoke test (deinterlace) =="
+set +e
+"${FFMPEG_BIN}" \
+  -hwaccel qsv \
+  -qsv_device /dev/dri/renderD128 \
+  -hwaccel_output_format qsv \
+  -f lavfi -i testsrc2=size=1280x720:rate=30 \
+  -vf "vpp_qsv=deinterlace=1" \
+  -t 2 \
+  -c:v h264_qsv \
+  -f null -
+status2=$?
+set -e
+
+if [[ $status2 -eq 0 ]]; then
+  echo "RESULT: QSV+DEINT OK"
+else
+  echo "RESULT: QSV+DEINT FAILED (exit ${status2})"
+  echo "HINT: Check /dev/dri/renderD128 permissions and QSV runtime availability."
 fi
 
-echo "RESULT: QSV FAILED (exit ${status})"
-echo "HINT: Check /dev/dri/renderD128 permissions and QSV runtime availability."
-exit "${status}"
+if [[ $status -ne 0 || $status2 -ne 0 ]]; then
+  exit 1
+fi
+exit 0
