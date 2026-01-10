@@ -68,6 +68,16 @@ class TestTranscodeHelpers(unittest.TestCase):
         self.assertIn("192k", args)
         self.assertIn("2", args)
 
+    def test_build_audio_maps(self):
+        build_audio_maps = self.transcode.build_audio_maps
+        maps, downmix = build_audio_maps("copy", True)
+        self.assertEqual(maps, ["-map", "0:a?"])
+        self.assertFalse(downmix)
+
+        maps, downmix = build_audio_maps("encode", True)
+        self.assertEqual(maps, ["-map", "0:a:0?"])
+        self.assertTrue(downmix)
+
     def test_build_video_filter(self):
         build_video_filter = self.transcode.build_video_filter
         self.assertEqual(
@@ -85,6 +95,9 @@ class TestTranscodeHelpers(unittest.TestCase):
         self.assertEqual(build_sw_filter(True), "bwdif")
         self.assertIsNone(build_sw_filter(False))
         self.assertIsNone(build_sw_filter(None))
+
+    def test_audio_mode_default_copy(self):
+        self.assertEqual(self.transcode.AUDIO_MODE, "copy")
 
     def test_resolve_ffmpeg_bin_prefers_env(self):
         transcode = self.transcode

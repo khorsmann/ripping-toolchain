@@ -151,6 +151,14 @@ def build_downmix_args() -> list[str]:
     ]
 
 
+def build_audio_maps(mode: str, add_downmix: bool) -> tuple[list[str], bool]:
+    if mode == "copy":
+        if add_downmix:
+            logging.warning("AUDIO_MODE=copy disables audio downmix")
+        return ["-map", "0:a?"], False
+    return ["-map", "0:a:0?"], add_downmix
+
+
 def build_video_filter(interlaced: bool | None, hwupload: bool) -> str | None:
     filters = []
     if interlaced is True:
@@ -200,6 +208,9 @@ MQTT_PAYLOAD_VERSION = 3
 ENABLE_SW_FALLBACK = getenv_bool("ENABLE_SW_FALLBACK", "true")
 MAX_HW_RETRIES = max(0, int(getenv("MAX_HW_RETRIES", "2")))
 ENABLE_AAC_DOWNMIX = getenv_bool("ENABLE_AAC_DOWNMIX", "false")
+AUDIO_MODE = getenv("AUDIO_MODE", "copy").strip().lower()
+if AUDIO_MODE not in {"encode", "copy"}:
+    raise RuntimeError("AUDIO_MODE must be 'encode' or 'copy'")
 
 
 # --------------------
@@ -393,10 +404,14 @@ def transcode_dir(client, job: dict):
             interlaced_effective = detect_interlaced(mkv)
 
         audio_channels = probe_audio_channels(mkv)
-        audio_args = build_audio_args(audio_channels, source_type)
         add_downmix = ENABLE_AAC_DOWNMIX
+        audio_maps, add_downmix = build_audio_maps(AUDIO_MODE, add_downmix)
+        if AUDIO_MODE == "copy":
+            audio_args = ["-c:a", "copy"]
+        else:
+            audio_args = build_audio_args(audio_channels, source_type)
 
-        maps = ["-map", "0:v:0", "-map", "0:a:0?", "-map", "0:s?"]
+        maps = ["-map", "0:v:0", *audio_maps, "-map", "0:s?"]
         if add_downmix:
             maps.extend(["-map", "0:a:0?"])
 

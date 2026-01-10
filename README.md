@@ -20,7 +20,7 @@ transcode_mqtt (FFmpeg) <--- MQTT subscription
 ```
 
 - **ripper/ripper.py** analysiert eine eingelegte DVD via MakeMKV CLI, wählt anhand einer Kapitel-Dauer-Heuristik geeignete Episoden aus, rippt sie nach `base_raw/<source_type>` und veröffentlicht anschließend ein MQTT-Event (`media/rip/done`), das Pfad, Serie, Staffel, Disc usw. enthält.
-- **transcode/transcode_mqtt.py** läuft als Dienst, abonniert das MQTT-Topic `media/rip/done`, queued jedes empfangene Path-Event und transkodiert alle darin enthaltenen `.mkv` Dateien nach `SERIES_DST_BASE` (standardmäßig `/media/Serien`) bzw. `MOVIE_DST_BASE` via `ffmpeg` + VAAPI-Hardwarebeschleunigung. Fortschritt und Fehler werden auf `media/transcode/start`, `media/transcode/done` bzw. `media/transcode/error` zurückgemeldet.
+- **transcode/transcode_mqtt.py** läuft als Dienst, abonniert das MQTT-Topic `media/rip/done`, queued jedes empfangene Path-Event und transkodiert alle darin enthaltenen `.mkv` Dateien nach `SERIES_DST_BASE` (standardmäßig `/media/Serien`) bzw. `MOVIE_DST_BASE` via `ffmpeg` + VAAPI-Hardwarebeschleunigung. Standardmäßig werden alle Audiospuren kopiert (`AUDIO_MODE=copy`), optional ist Re-Encoding möglich. Fortschritt und Fehler werden auf `media/transcode/start`, `media/transcode/done` bzw. `media/transcode/error` zurückgemeldet.
 - Optionale Integrationen (z. B. Home Assistant) können sowohl auf rip- als auch transcode-Topics reagieren, siehe `misc/homeassistant/`.
 - **transcode/rescan.py** prüft den Roh-Baum (`SRC_BASE`) gegen die Ziele (`SERIES_DST_BASE`/`MOVIE_DST_BASE`) und sendet MQTT-Jobs für alle Quell-Dirs, in denen transkodierte MKVs fehlen; `--dry-run` zeigt nur an, was gesendet würde. Lädt optional das gleiche Env-File wie der Dienst (`--env-file`, Default `/etc/transcode-mqtt.env`).
 
@@ -44,7 +44,7 @@ transcode_mqtt (FFmpeg) <--- MQTT subscription
    - Wirft am Ende das Laufwerk aus und publiziert das oben genannte MQTT-Payload.
 
 2. **Transcode-Dienst**  
-   - Läuft typischerweise via Systemd (`transcode/transcode-mqtt.service`) und lädt seine Umgebung aus `/etc/transcode-mqtt.env`.
+   - Läuft typischerweise via Systemd (`transcode/transcode-mqtt.service`) und lädt seine Umgebung aus `/etc/transcode-mqtt.env` (nutzt `/usr/lib/jellyfin-ffmpeg/ffmpeg`, falls vorhanden; sonst System-FFmpeg, überschreibbar via `FFMPEG_BIN`/`FFPROBE_BIN`).
    - Sobald ein `media/rip/done`-Event eingeht, landet der Pfad in einer internen Queue. Ein Worker-Thread verarbeitet das Verzeichnis sequenziell:
      - Vor jeder Datei wird `media/transcode/start` inkl. Eingangs- und Ausgabepfad publiziert.
      - Während `ffmpeg` läuft, hält ein Lock unter `/var/lock/vaapi.lock` andere Instanzen von der GPU fern.
