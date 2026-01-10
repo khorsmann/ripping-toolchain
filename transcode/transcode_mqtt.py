@@ -44,7 +44,7 @@ def probe_duration(path: Path) -> float | None:
     try:
         out = subprocess.check_output(
             [
-                "ffprobe",
+                FFPROBE_BIN,
                 "-v",
                 "error",
                 "-show_entries",
@@ -69,7 +69,7 @@ def detect_interlaced(path: Path) -> bool | None:
     try:
         out = subprocess.check_output(
             [
-                "ffprobe",
+                FFPROBE_BIN,
                 "-v",
                 "error",
                 "-select_streams",
@@ -101,7 +101,7 @@ def probe_audio_channels(path: Path) -> int | None:
     try:
         out = subprocess.check_output(
             [
-                "ffprobe",
+                FFPROBE_BIN,
                 "-v",
                 "error",
                 "-select_streams",
@@ -245,6 +245,30 @@ def build_mqtt_client() -> mqtt.Client:
     return client
 
 
+def resolve_ffmpeg_bin() -> str:
+    explicit = os.getenv("FFMPEG_BIN")
+    if explicit:
+        return explicit
+    jellyfin = Path("/usr/lib/jellyfin-ffmpeg/ffmpeg")
+    if jellyfin.exists():
+        return str(jellyfin)
+    return "ffmpeg"
+
+
+def resolve_ffprobe_bin() -> str:
+    explicit = os.getenv("FFPROBE_BIN")
+    if explicit:
+        return explicit
+    jellyfin = Path("/usr/lib/jellyfin-ffmpeg/ffprobe")
+    if jellyfin.exists():
+        return str(jellyfin)
+    return "ffprobe"
+
+
+FFMPEG_BIN = resolve_ffmpeg_bin()
+FFPROBE_BIN = resolve_ffprobe_bin()
+
+
 def series_src_base_for_source(source_type: str) -> Path:
     cleaned = (source_type or "").strip().lower()
     if cleaned in {"dvd", "bluray"}:
@@ -382,7 +406,7 @@ def transcode_dir(client, job: dict):
 
         def build_qsv_cmd() -> list[str]:
             cmd = [
-                "ffmpeg",
+                FFMPEG_BIN,
                 "-init_hw_device",
                 "qsv=hw:/dev/dri/renderD128",
                 "-filter_hw_device",
@@ -414,7 +438,7 @@ def transcode_dir(client, job: dict):
 
         def build_vaapi_cmd() -> list[str]:
             cmd = [
-                "ffmpeg",
+                FFMPEG_BIN,
                 "-init_hw_device",
                 "vaapi=va:/dev/dri/renderD128",
                 "-filter_hw_device",
@@ -444,7 +468,7 @@ def transcode_dir(client, job: dict):
 
         def build_sw_cmd() -> list[str]:
             cmd = [
-                "ffmpeg",
+                FFMPEG_BIN,
                 "-i",
                 str(mkv),
             ]

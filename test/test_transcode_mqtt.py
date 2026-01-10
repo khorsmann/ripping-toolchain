@@ -86,6 +86,17 @@ class TestTranscodeHelpers(unittest.TestCase):
         self.assertIsNone(build_sw_filter(False))
         self.assertIsNone(build_sw_filter(None))
 
+    def test_resolve_ffmpeg_bin_prefers_env(self):
+        transcode = self.transcode
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fake = Path(tmpdir) / "ffmpeg"
+            fake.write_text("")
+            os.environ["FFMPEG_BIN"] = str(fake)
+            try:
+                self.assertEqual(transcode.resolve_ffmpeg_bin(), str(fake))
+            finally:
+                del os.environ["FFMPEG_BIN"]
+
     def test_series_src_base_for_source(self):
         transcode = self.transcode
         with tempfile.TemporaryDirectory() as tmpdir:
