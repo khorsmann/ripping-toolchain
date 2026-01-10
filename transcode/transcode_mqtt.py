@@ -245,6 +245,15 @@ def build_mqtt_client() -> mqtt.Client:
     return client
 
 
+def series_src_base_for_source(source_type: str) -> Path:
+    cleaned = (source_type or "").strip().lower()
+    if cleaned in {"dvd", "bluray"}:
+        candidate_root = SRC_BASE / cleaned
+        if candidate_root.exists():
+            return (candidate_root / SERIES_SUBPATH).resolve()
+    return SERIES_SRC_BASE
+
+
 # --------------------
 # Transcode Logic
 # --------------------
@@ -256,6 +265,7 @@ def transcode_dir(client, job: dict):
     source_type = job.get("source_type", "dvd")
     raw_files = job.get("files") or []
     explicit_files = [Path(p).expanduser().resolve() for p in raw_files]
+    series_src_base = series_src_base_for_source(source_type)
 
     if src_dir and not src_dir.exists():
         logging.warning(f"job path does not exist: {src_dir}")
@@ -316,7 +326,7 @@ def transcode_dir(client, job: dict):
             out = MOVIE_DST_BASE / rel
         else:
             try:
-                rel = mkv.relative_to(SERIES_SRC_BASE)
+                rel = mkv.relative_to(series_src_base)
             except ValueError:
                 rel = None
                 if src_root:
@@ -326,7 +336,7 @@ def transcode_dir(client, job: dict):
                         rel = None
                 if rel is None:
                     logging.warning(
-                        f"{mkv} not under configured series base {SERIES_SRC_BASE}"
+                        f"{mkv} not under configured series base {series_src_base}"
                     )
                     continue
             out = SERIES_DST_BASE / rel

@@ -354,6 +354,7 @@ def main():
         source_label = disc_target
     base_raw = config["storage"]["base_raw"].expanduser().resolve()
     source_type = "dvd" if args.dvd else device_type
+    raw_root = (base_raw / source_type).resolve()
     series_subpath = config["storage"]["series_path"]
     movie_subpath = config["storage"]["movie_path"]
     min_episode_minutes = config["heuristics"]["min_episode_minutes"]
@@ -370,13 +371,13 @@ def main():
     if movie_mode:
         movie_name_raw = args.movie_name.strip()
         movie_name = sanitize_movie_name(movie_name_raw)
-        outdir = (base_raw / movie_subpath).resolve()
+        outdir = (raw_root / movie_subpath).resolve()
         info_file = outdir / f"{movie_name}.info"
         movie_output = outdir / f"{movie_name}.mkv"
         tmp_dir = outdir / f"{movie_name}.tmp{secrets.token_hex(2)}"
     else:
         outdir = (
-            base_raw / series_subpath / args.series / f"S{args.season}" / args.disc
+            raw_root / series_subpath / args.series / f"S{args.season}" / args.disc
         ).resolve()
         info_file = outdir / f"{args.disc}.info"
         tmp_dir = None

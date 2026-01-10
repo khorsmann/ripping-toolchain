@@ -16,7 +16,7 @@ type = "dvd"
 # type = "bluray"
 
 [storage]
-base_raw = "/path/to/raw/dvd/output"
+base_raw = "/media/raw"
 series_path = "Serien"
 movie_path = "Movies"
 

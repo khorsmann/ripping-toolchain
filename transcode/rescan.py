@@ -4,7 +4,7 @@ Vergleicht die Raw-Struktur (SRC_BASE) mit dem transkodierten Ziel (SERIES_DST_B
 und publiziert MQTT-Jobs für alle Quell-Verzeichnisse, in denen noch MKVs fehlen.
 
 Beispiel:
-  SRC_BASE=/media/raw/dvd SERIES_DST_BASE=/media/Serien MOVIE_DST_BASE=/media/Filme \\
+  SRC_BASE=/media/raw SERIES_DST_BASE=/media/Serien MOVIE_DST_BASE=/media/Filme \\
   MQTT_HOST=broker MQTT_USER=user MQTT_PASSWORD=pass \\
   ./transcode/rescan.py --dry-run
 """
@@ -53,6 +53,17 @@ def parse_source_type(value: str) -> str | None:
     if cleaned in {"dvd", "bluray"}:
         return cleaned
     return None
+
+
+def collect_source_roots(src_base: Path, default_type: str) -> List[Tuple[str, Path]]:
+    roots: List[Tuple[str, Path]] = []
+    for candidate in ("dvd", "bluray"):
+        path = src_base / candidate
+        if path.exists():
+            roots.append((candidate, path))
+    if roots:
+        return roots
+    return [(default_type, src_base)]
 
 
 def find_source_type_marker(start_dir: Path, stop_dir: Path) -> str | None:
@@ -276,7 +287,6 @@ def main():
     series_subpath = Path(getenv("SERIES_SUBPATH", "Serien"))
     if series_subpath.is_absolute():
         raise RuntimeError("SERIES_SUBPATH must be relative")
-    series_src_base = (src_base / series_subpath).resolve()
     series_dst_base = (
         Path(getenv("SERIES_DST_BASE", "/media/Serien")).expanduser().resolve()
     )
@@ -284,76 +294,109 @@ def main():
     movie_subpath = Path(getenv("MOVIE_SUBPATH", "Filme"))
     if movie_subpath.is_absolute():
         raise RuntimeError("MOVIE_SUBPATH must be relative")
-    movie_src_base = (src_base / movie_subpath).resolve()
     movie_dst_base = (
         Path(getenv("MOVIE_DST_BASE", "/media/Filme")).expanduser().resolve()
     )
 
+    source_roots = collect_source_roots(src_base, source_type_default)
+    roots_label = ", ".join(f"{stype}={path}" for stype, path in source_roots)
     logging.info(
-        "config: MQTT_TOPIC=%s, SRC_BASE=%s (series subpath=%s, movie subpath=%s), "
+        "config: MQTT_TOPIC=%s, SRC_BASE=%s (roots=%s, series subpath=%s, movie subpath=%s), "
         "SERIES_DST_BASE=%s, MOVIE_DST_BASE=%s",
         MQTT_TOPIC,
         src_base,
+        roots_label,
         series_subpath,
         movie_subpath,
         series_dst_base,
         movie_dst_base,
     )
 
-    series_dirs, series_skipped = collect_missing_series_dirs(
-        series_src_base, series_dst_base
-    )
-    movie_dirs, movie_skipped = collect_missing_movie_dirs(
-        movie_src_base, movie_dst_base
-    )
+    scan_results = []
+    series_skipped_all: List[Path] = []
+    movie_skipped_all: List[Path] = []
+    for source_type, source_root in source_roots:
+        series_src_base = (source_root / series_subpath).resolve()
+        movie_src_base = (source_root / movie_subpath).resolve()
+        series_dirs, series_skipped = collect_missing_series_dirs(
+            series_src_base, series_dst_base
+        )
+        movie_dirs, movie_skipped = collect_missing_movie_dirs(
+            movie_src_base, movie_dst_base
+        )
+        scan_results.append(
+            {
+                "source_type": source_type,
+                "source_root": source_root,
+                "series_dirs": series_dirs,
+                "movie_dirs": movie_dirs,
+            }
+        )
+        series_skipped_all.extend(series_skipped)
+        movie_skipped_all.extend(movie_skipped)
 
-    if not series_dirs and not movie_dirs:
+    series_total = sum(len(result["series_dirs"]) for result in scan_results)
+    movie_total = sum(len(result["movie_dirs"]) for result in scan_results)
+
+    if not series_total and not movie_total:
         logging.info("no missing transcodes detected")
-        if series_skipped or movie_skipped:
+        if series_skipped_all or movie_skipped_all:
             logging.info(
                 "skipped temp files: %s",
-                ", ".join(str(p) for p in sorted(series_skipped + movie_skipped)),
+                ", ".join(
+                    str(p)
+                    for p in sorted(series_skipped_all + movie_skipped_all)
+                ),
             )
         return
 
     logging.info(
         "found %d series dirs and %d movie dirs with missing outputs",
-        len(series_dirs),
-        len(movie_dirs),
+        series_total,
+        movie_total,
     )
 
-    if series_skipped or movie_skipped:
+    if series_skipped_all or movie_skipped_all:
         logging.info(
             "skipped temp files: %s",
-            ", ".join(str(p) for p in sorted(series_skipped + movie_skipped)),
+            ", ".join(
+                str(p) for p in sorted(series_skipped_all + movie_skipped_all)
+            ),
         )
 
     client = build_mqtt_client()
     connect_mqtt(client)
 
-    for src_dir, mkvs in sorted(series_dirs.items()):
-        source_type = detect_source_type(src_dir, src_base, source_type_default, mkvs[0])
-        payload = {
-            "version": MQTT_PAYLOAD_VERSION,
-            "mode": "series",
-            "source_type": source_type,
-            "path": str(src_dir.resolve()),
-            "files": [str(p.resolve()) for p in mkvs],
-            "interlaced": None,
-        }
-        mqtt_publish(client, MQTT_TOPIC, payload, args.dry_run)
+    for result in scan_results:
+        source_root = result["source_root"]
+        source_type_default = result["source_type"]
+        for src_dir, mkvs in sorted(result["series_dirs"].items()):
+            source_type = detect_source_type(
+                src_dir, source_root, source_type_default, mkvs[0]
+            )
+            payload = {
+                "version": MQTT_PAYLOAD_VERSION,
+                "mode": "series",
+                "source_type": source_type,
+                "path": str(src_dir.resolve()),
+                "files": [str(p.resolve()) for p in mkvs],
+                "interlaced": None,
+            }
+            mqtt_publish(client, MQTT_TOPIC, payload, args.dry_run)
 
-    for parent, mkvs in sorted(movie_dirs.items()):
-        source_type = detect_source_type(parent, src_base, source_type_default, mkvs[0])
-        payload = {
-            "version": MQTT_PAYLOAD_VERSION,
-            "mode": "movie",
-            "source_type": source_type,
-            "path": str(parent.resolve()),
-            "files": [str(p.resolve()) for p in mkvs],
-            "interlaced": None,
-        }
-        mqtt_publish(client, MQTT_TOPIC, payload, args.dry_run)
+        for parent, mkvs in sorted(result["movie_dirs"].items()):
+            source_type = detect_source_type(
+                parent, source_root, source_type_default, mkvs[0]
+            )
+            payload = {
+                "version": MQTT_PAYLOAD_VERSION,
+                "mode": "movie",
+                "source_type": source_type,
+                "path": str(parent.resolve()),
+                "files": [str(p.resolve()) for p in mkvs],
+                "interlaced": None,
+            }
+            mqtt_publish(client, MQTT_TOPIC, payload, args.dry_run)
 
     client.disconnect()
     logging.info("done")

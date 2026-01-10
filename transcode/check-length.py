@@ -145,16 +145,34 @@ def main() -> int:
     series_subpath = Path(getenv("SERIES_SUBPATH", "Serien"))
     if series_subpath.is_absolute():
         raise RuntimeError("SERIES_SUBPATH must be relative")
-    series_src_base = (src_base / series_subpath).resolve()
     series_dst_base = Path(getenv("SERIES_DST_BASE", "/media/Serien")).expanduser().resolve()
 
     movie_subpath = Path(getenv("MOVIE_SUBPATH", "Filme"))
     if movie_subpath.is_absolute():
         raise RuntimeError("MOVIE_SUBPATH must be relative")
-    movie_src_base = (src_base / movie_subpath).resolve()
     movie_dst_base = Path(getenv("MOVIE_DST_BASE", "/media/Filme")).expanduser().resolve()
 
-    pairs = collect_pairs(series_src_base, series_dst_base, movie_src_base, movie_dst_base)
+    source_type_default = getenv("SOURCE_TYPE", "dvd").strip().lower()
+    if source_type_default not in {"dvd", "bluray"}:
+        raise RuntimeError("SOURCE_TYPE must be 'dvd' or 'bluray'")
+
+    source_roots = []
+    for candidate in ("dvd", "bluray"):
+        candidate_root = src_base / candidate
+        if candidate_root.exists():
+            source_roots.append(candidate_root)
+    if not source_roots:
+        source_roots.append(src_base)
+
+    pairs = {}
+    for source_root in source_roots:
+        series_src_base = (source_root / series_subpath).resolve()
+        movie_src_base = (source_root / movie_subpath).resolve()
+        pairs.update(
+            collect_pairs(
+                series_src_base, series_dst_base, movie_src_base, movie_dst_base
+            )
+        )
 
     missing_dst = []
     missing_src = []

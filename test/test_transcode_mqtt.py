@@ -1,4 +1,6 @@
 import importlib.util
+import os
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -15,7 +17,19 @@ def load_transcode_module():
 class TestTranscodeHelpers(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        cls._env_backup = dict(os.environ)
+        cls._tmpdir = tempfile.TemporaryDirectory()
+        os.environ.setdefault("MQTT_HOST", "localhost")
+        os.environ.setdefault("MQTT_USER", "user")
+        os.environ.setdefault("MQTT_PASSWORD", "pass")
+        os.environ.setdefault("SRC_BASE", cls._tmpdir.name)
         cls.transcode = load_transcode_module()
+
+    @classmethod
+    def tearDownClass(cls):
+        os.environ.clear()
+        os.environ.update(cls._env_backup)
+        cls._tmpdir.cleanup()
 
     def test_detect_interlaced(self):
         detect_interlaced = self.transcode.detect_interlaced
@@ -71,6 +85,38 @@ class TestTranscodeHelpers(unittest.TestCase):
         self.assertEqual(build_sw_filter(True), "bwdif")
         self.assertIsNone(build_sw_filter(False))
         self.assertIsNone(build_sw_filter(None))
+
+    def test_series_src_base_for_source(self):
+        transcode = self.transcode
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir)
+            (base / "dvd" / "Serien").mkdir(parents=True)
+            (base / "bluray" / "Serien").mkdir(parents=True)
+
+            old_src_base = transcode.SRC_BASE
+            old_series_subpath = transcode.SERIES_SUBPATH
+            old_series_src_base = transcode.SERIES_SRC_BASE
+            try:
+                transcode.SRC_BASE = base
+                transcode.SERIES_SUBPATH = Path("Serien")
+                transcode.SERIES_SRC_BASE = (base / "Serien").resolve()
+
+                self.assertEqual(
+                    transcode.series_src_base_for_source("dvd"),
+                    (base / "dvd" / "Serien").resolve(),
+                )
+                self.assertEqual(
+                    transcode.series_src_base_for_source("bluray"),
+                    (base / "bluray" / "Serien").resolve(),
+                )
+                self.assertEqual(
+                    transcode.series_src_base_for_source("unknown"),
+                    (base / "Serien").resolve(),
+                )
+            finally:
+                transcode.SRC_BASE = old_src_base
+                transcode.SERIES_SUBPATH = old_series_subpath
+                transcode.SERIES_SRC_BASE = old_series_src_base
 
 
 if __name__ == "__main__":

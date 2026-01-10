@@ -77,8 +77,8 @@ class TestRescanHelpers(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             base = Path(tmpdir)
             src_base = base / "raw"
-            series_src = src_base / "Serien" / "Show" / "S01" / "disc01"
-            movie_src = src_base / "Filme" / "MovieA"
+            series_src = src_base / "dvd" / "Serien" / "Show" / "S01" / "disc01"
+            movie_src = src_base / "dvd" / "Filme" / "MovieA"
             series_src.mkdir(parents=True)
             movie_src.mkdir(parents=True)
 
@@ -111,7 +111,7 @@ class TestRescanHelpers(unittest.TestCase):
 
             with mock.patch.dict(os.environ, env, clear=False):
                 with mock.patch.object(rescan, "build_mqtt_client") as build_client:
-                    build_client.return_value = object()
+                    build_client.return_value = mock.Mock()
                     with mock.patch.object(rescan, "connect_mqtt"):
                         with mock.patch.object(rescan, "mqtt_publish", side_effect=fake_publish):
                             with mock.patch.object(rescan, "detect_source_type") as detect_type:
