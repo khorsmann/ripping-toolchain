@@ -94,9 +94,9 @@ def detect_interlaced(path: Path) -> bool | None:
     return None
 
 
-def probe_audio_channels(path: Path) -> int | None:
+def probe_audio_streams(path: Path) -> list[dict]:
     """
-    Returns channel count of the first audio stream, or None if unavailable.
+    Returns audio streams with index, channels, and language tags (if present).
     """
     try:
         out = subprocess.check_output(
@@ -105,27 +105,71 @@ def probe_audio_channels(path: Path) -> int | None:
                 "-v",
                 "error",
                 "-select_streams",
-                "a:0",
+                "a",
                 "-show_entries",
-                "stream=channels",
+                "stream=index,channels:stream_tags=language",
                 "-of",
-                "default=noprint_wrappers=1:nokey=1",
+                "json",
                 str(path),
             ],
             stderr=subprocess.DEVNULL,
         ).decode()
-        channels_raw = out.strip()
-        if not channels_raw:
-            return None
-        return int(channels_raw)
+        data = json.loads(out)
+        streams = []
+        for stream in data.get("streams", []):
+            streams.append(
+                {
+                    "index": stream.get("index"),
+                    "channels": stream.get("channels"),
+                    "language": (stream.get("tags", {}) or {}).get("language"),
+                }
+            )
+        return streams
     except Exception as e:
-        logging.warning("ffprobe audio channels failed for %s: %s", path, e)
-        return None
+        logging.warning("ffprobe audio streams failed for %s: %s", path, e)
+        return []
 
 
-def build_audio_args(channels: int | None, source_type: str) -> list[str]:
+def probe_subtitle_streams(path: Path) -> list[dict]:
+    """
+    Returns subtitle streams with index and language tags (if present).
+    """
+    try:
+        out = subprocess.check_output(
+            [
+                FFPROBE_BIN,
+                "-v",
+                "error",
+                "-select_streams",
+                "s",
+                "-show_entries",
+                "stream=index:stream_tags=language",
+                "-of",
+                "json",
+                str(path),
+            ],
+            stderr=subprocess.DEVNULL,
+        ).decode()
+        data = json.loads(out)
+        streams = []
+        for stream in data.get("streams", []):
+            streams.append(
+                {
+                    "index": stream.get("index"),
+                    "language": (stream.get("tags", {}) or {}).get("language"),
+                }
+            )
+        return streams
+    except Exception as e:
+        logging.warning("ffprobe subtitle streams failed for %s: %s", path, e)
+        return []
+
+
+def build_audio_args(
+    output_index: int, channels: int | None, source_type: str
+) -> list[str]:
     if channels is None:
-        bitrate = "640k" if source_type == "bluray" else "640k"
+        bitrate = "640k"
         logging.info("audio channels unknown, using %s for EAC3", bitrate)
     elif channels <= 2:
         bitrate = "256k"
@@ -133,30 +177,39 @@ def build_audio_args(channels: int | None, source_type: str) -> list[str]:
         bitrate = "768k" if source_type == "bluray" else "640k"
 
     return [
-        "-c:a:0",
+        f"-c:a:{output_index}",
         "eac3",
-        "-b:a:0",
+        f"-b:a:{output_index}",
         bitrate,
     ]
 
 
-def build_downmix_args() -> list[str]:
+def build_downmix_args(output_index: int) -> list[str]:
     return [
-        "-c:a:1",
+        f"-c:a:{output_index}",
         "aac",
-        "-b:a:1",
+        f"-b:a:{output_index}",
         "192k",
-        "-ac:a:1",
+        f"-ac:a:{output_index}",
         "2",
     ]
 
 
-def build_audio_maps(mode: str, add_downmix: bool) -> tuple[list[str], bool]:
-    if mode == "copy":
-        if add_downmix:
-            logging.warning("AUDIO_MODE=copy disables audio downmix")
-        return ["-map", "0:a?"], False
-    return ["-map", "0:a:0?"], add_downmix
+def parse_langs(raw: str | None, default: str) -> set[str]:
+    value = raw if raw and raw.strip() else default
+    parts = [part.strip().lower() for part in value.split(",")]
+    return {part for part in parts if part}
+
+
+def filter_streams_by_language(streams: list[dict], allowed: set[str]) -> list[dict]:
+    if not allowed:
+        return streams
+    filtered = []
+    for stream in streams:
+        lang = (stream.get("language") or "").lower()
+        if lang in allowed:
+            filtered.append(stream)
+    return filtered
 
 
 def build_video_filter(interlaced: bool | None, hwupload: bool) -> str | None:
@@ -214,9 +267,11 @@ MQTT_PAYLOAD_VERSION = 3
 ENABLE_SW_FALLBACK = getenv_bool("ENABLE_SW_FALLBACK", "true")
 MAX_HW_RETRIES = max(0, int(getenv("MAX_HW_RETRIES", "2")))
 ENABLE_AAC_DOWNMIX = getenv_bool("ENABLE_AAC_DOWNMIX", "false")
-AUDIO_MODE = getenv("AUDIO_MODE", "copy").strip().lower()
-if AUDIO_MODE not in {"encode", "copy"}:
-    raise RuntimeError("AUDIO_MODE must be 'encode' or 'copy'")
+AUDIO_MODE = getenv("AUDIO_MODE", "auto").strip().lower()
+if AUDIO_MODE not in {"auto", "encode", "copy"}:
+    raise RuntimeError("AUDIO_MODE must be 'auto', 'encode' or 'copy'")
+AUDIO_LANGS = parse_langs(getenv("AUDIO_LANGS"), "eng,ger,deu")
+SUB_LANGS = parse_langs(getenv("SUB_LANGS"), "eng,ger,deu")
 
 
 # --------------------
@@ -398,17 +453,61 @@ def transcode_dir(client, job: dict):
         else:
             interlaced_effective = detect_interlaced(mkv)
 
-        audio_channels = probe_audio_channels(mkv)
-        add_downmix = ENABLE_AAC_DOWNMIX
-        audio_maps, add_downmix = build_audio_maps(AUDIO_MODE, add_downmix)
-        if AUDIO_MODE == "copy":
-            audio_args = ["-c:a", "copy"]
-        else:
-            audio_args = build_audio_args(audio_channels, source_type)
+        audio_streams = probe_audio_streams(mkv)
+        subtitle_streams = probe_subtitle_streams(mkv)
+        selected_audio = filter_streams_by_language(audio_streams, AUDIO_LANGS)
+        selected_subs = filter_streams_by_language(subtitle_streams, SUB_LANGS)
 
-        maps = ["-map", "0:v:0", *audio_maps, "-map", "0:s?"]
-        if add_downmix:
-            maps.extend(["-map", "0:a:0?"])
+        if audio_streams and not selected_audio:
+            logging.warning(
+                "no audio streams matched language filter %s, keeping all audio",
+                sorted(AUDIO_LANGS),
+            )
+            selected_audio = audio_streams
+
+        audio_mode_effective = AUDIO_MODE
+        if audio_mode_effective == "auto":
+            audio_mode_effective = "encode" if source_type == "bluray" else "copy"
+
+        add_downmix = ENABLE_AAC_DOWNMIX and audio_mode_effective != "copy"
+        if audio_mode_effective == "copy" and ENABLE_AAC_DOWNMIX:
+            logging.warning("AUDIO_MODE=copy disables audio downmix")
+
+        maps = ["-map", "0:v:0"]
+        audio_args: list[str] = []
+        output_audio_index = 0
+        for stream in selected_audio:
+            stream_index = stream.get("index")
+            if stream_index is None:
+                continue
+            maps.extend(["-map", f"0:{stream_index}"])
+            if audio_mode_effective == "copy":
+                continue
+            audio_args.extend(
+                build_audio_args(output_audio_index, stream.get("channels"), source_type)
+            )
+            output_audio_index += 1
+
+        if audio_mode_effective == "copy":
+            audio_args = ["-c:a", "copy"]
+        elif not audio_args and selected_audio:
+            audio_args = [
+                "-c:a",
+                "eac3",
+            ]
+
+        if add_downmix and selected_audio:
+            first_stream = selected_audio[0].get("index")
+            if first_stream is not None:
+                maps.extend(["-map", f"0:{first_stream}"])
+                audio_args.extend(build_downmix_args(output_audio_index))
+                output_audio_index += 1
+
+        for stream in selected_subs:
+            stream_index = stream.get("index")
+            if stream_index is None:
+                continue
+            maps.extend(["-map", f"0:{stream_index}"])
 
         qsv_global_quality = 21 if source_type == "bluray" else 25
         vaapi_qp = 22 if source_type == "bluray" else 26

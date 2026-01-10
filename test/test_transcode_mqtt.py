@@ -43,41 +43,51 @@ class TestTranscodeHelpers(unittest.TestCase):
             mocked.side_effect = OSError("boom")
             self.assertIsNone(detect_interlaced(Path("dummy.mkv")))
 
-    def test_probe_audio_channels(self):
-        probe_audio_channels = self.transcode.probe_audio_channels
+    def test_probe_audio_streams(self):
+        probe_audio_streams = self.transcode.probe_audio_streams
         with mock.patch.object(self.transcode.subprocess, "check_output") as mocked:
-            mocked.return_value = b"2\n"
-            self.assertEqual(probe_audio_channels(Path("dummy.mkv")), 2)
-            mocked.return_value = b"6\n"
-            self.assertEqual(probe_audio_channels(Path("dummy.mkv")), 6)
+            mocked.return_value = (
+                b'{"streams":[{"index":1,"channels":6,"tags":{"language":"eng"}}]}'
+            )
+            self.assertEqual(
+                probe_audio_streams(Path("dummy.mkv")),
+                [{"index": 1, "channels": 6, "language": "eng"}],
+            )
 
         with mock.patch.object(self.transcode.subprocess, "check_output") as mocked:
             mocked.side_effect = OSError("boom")
-            self.assertIsNone(probe_audio_channels(Path("dummy.mkv")))
+            self.assertEqual(probe_audio_streams(Path("dummy.mkv")), [])
 
     def test_build_audio_args(self):
         build_audio_args = self.transcode.build_audio_args
-        self.assertIn("256k", build_audio_args(2, "dvd"))
-        self.assertIn("640k", build_audio_args(6, "dvd"))
-        self.assertIn("768k", build_audio_args(6, "bluray"))
-        self.assertIn("640k", build_audio_args(None, "dvd"))
+        self.assertIn("256k", build_audio_args(0, 2, "dvd"))
+        self.assertIn("640k", build_audio_args(0, 6, "dvd"))
+        self.assertIn("768k", build_audio_args(0, 6, "bluray"))
+        self.assertIn("640k", build_audio_args(0, None, "dvd"))
 
     def test_build_downmix_args(self):
-        args = self.transcode.build_downmix_args()
+        args = self.transcode.build_downmix_args(1)
         self.assertIn("aac", args)
         self.assertIn("192k", args)
         self.assertIn("2", args)
 
-    def test_build_audio_maps(self):
-        build_audio_maps = self.transcode.build_audio_maps
-        maps, downmix = build_audio_maps("copy", True)
-        self.assertEqual(maps, ["-map", "0:a?"])
-        self.assertFalse(downmix)
+    def test_parse_langs(self):
+        parse_langs = self.transcode.parse_langs
+        self.assertEqual(parse_langs("eng,ger", "eng"), {"eng", "ger"})
+        self.assertEqual(parse_langs("", "eng"), {"eng"})
+        self.assertEqual(parse_langs(None, "eng,deu"), {"eng", "deu"})
 
-        maps, downmix = build_audio_maps("encode", True)
-        self.assertEqual(maps, ["-map", "0:a:0?"])
-        self.assertTrue(downmix)
-
+    def test_filter_streams_by_language(self):
+        filter_streams = self.transcode.filter_streams_by_language
+        streams = [
+            {"index": 0, "language": "eng"},
+            {"index": 1, "language": "ger"},
+            {"index": 2, "language": None},
+        ]
+        self.assertEqual(
+            filter_streams(streams, {"eng"}), [{"index": 0, "language": "eng"}]
+        )
+        self.assertEqual(filter_streams(streams, set()), streams)
     def test_build_video_filter(self):
         build_video_filter = self.transcode.build_video_filter
         self.assertEqual(
@@ -97,7 +107,7 @@ class TestTranscodeHelpers(unittest.TestCase):
         self.assertIsNone(build_sw_filter(None))
 
     def test_audio_mode_default_copy(self):
-        self.assertEqual(self.transcode.AUDIO_MODE, "copy")
+        self.assertEqual(self.transcode.AUDIO_MODE, "auto")
 
     def test_resolve_ffmpeg_bin_prefers_env(self):
         transcode = self.transcode
