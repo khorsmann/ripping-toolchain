@@ -80,4 +80,5 @@ transcode_mqtt (FFmpeg) <--- MQTT subscription
 
 - Beide Komponenten gehen davon aus, dass `series_path` (Ripper) und `SERIES_SUBPATH` (Transcode) identisch sind. Bei `SRC_BASE` ohne Unterordner werden Serien unter `SRC_BASE/<SERIES_SUBPATH>` erwartet; bei `SRC_BASE` mit `dvd/` bzw. `bluray/` darunter liegt die Struktur unter `SRC_BASE/<source_type>/<SERIES_SUBPATH>`. Filme landen gesammelt unter `MOVIE_DST_BASE`.
 - MQTT-Topics lassen sich über Environment-Variablen anpassen; Standard ist `media/rip/done` für Eingänge und `media/transcode/*` für Statusmeldungen.
+- Zum Debuggen von QSV gibt es `misc/qsv-test.sh` (nutzt Jellyfin-FFmpeg, falls vorhanden; sonst System-FFmpeg) und führt einen kurzen Hardware-Encode-Test aus.
 - Der komplette Workflow dient ausschließlich dazu, privat erworbene Medien für den Eigenbedarf zu digitalisieren. Rechte Dritter (DRM, Urheberrecht) sind zu beachten; eine Weitergabe oder öffentliche Bereitstellung gerippter/transkodierter Dateien ist nicht vorgesehen.
