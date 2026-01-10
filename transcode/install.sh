@@ -29,12 +29,16 @@ while :; do
 done
 
 echo "Stopping $SERVICE..."
-systemctl stop "$SERVICE"
+if systemctl is-active --quiet "$SERVICE"; then
+  systemctl stop "$SERVICE"
+else
+  echo "  service not active; skipping stop"
+fi
 
 echo "Installing files..."
 install -o root -g root -m 0755 transcode-mqtt.service /etc/systemd/system/transcode-mqtt.service
 install -o root -g root -m 0755 transcode_mqtt.py "$SVC_BIN"
-install -o root -g root -m 0600 etc/transcode-mqtt.env /etc/transcode-mqtt.env
+install -o root -g root -m 0644 etc/transcode-mqtt.env /etc/transcode-mqtt.env
 
 echo "Reloading systemd daemon..."
 systemctl daemon-reload
