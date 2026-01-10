@@ -106,6 +106,16 @@ class TestTranscodeHelpers(unittest.TestCase):
         self.assertIsNone(build_sw_filter(False))
         self.assertIsNone(build_sw_filter(None))
 
+    def test_probe_video_codec(self):
+        probe_video_codec = self.transcode.probe_video_codec
+        with mock.patch.object(self.transcode.subprocess, "check_output") as mocked:
+            mocked.return_value = b"vc1\n"
+            self.assertEqual(probe_video_codec(Path("dummy.mkv")), "vc1")
+
+        with mock.patch.object(self.transcode.subprocess, "check_output") as mocked:
+            mocked.side_effect = OSError("boom")
+            self.assertIsNone(probe_video_codec(Path("dummy.mkv")))
+
     def test_audio_mode_default_copy(self):
         self.assertEqual(self.transcode.AUDIO_MODE, "auto")
 

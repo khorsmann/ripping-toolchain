@@ -165,6 +165,32 @@ def probe_subtitle_streams(path: Path) -> list[dict]:
         return []
 
 
+def probe_video_codec(path: Path) -> str | None:
+    """
+    Returns the codec name of the first video stream, if available.
+    """
+    try:
+        out = subprocess.check_output(
+            [
+                FFPROBE_BIN,
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=codec_name",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                str(path),
+            ],
+            stderr=subprocess.DEVNULL,
+        ).decode()
+        codec = out.strip().lower()
+        return codec or None
+    except Exception as e:
+        logging.warning("ffprobe video codec failed for %s: %s", path, e)
+        return None
+
 def build_audio_args(
     output_index: int, channels: int | None, source_type: str
 ) -> list[str]:
@@ -453,6 +479,7 @@ def transcode_dir(client, job: dict):
         else:
             interlaced_effective = detect_interlaced(mkv)
 
+        video_codec = probe_video_codec(mkv)
         audio_streams = probe_audio_streams(mkv)
         subtitle_streams = probe_subtitle_streams(mkv)
         selected_audio = filter_streams_by_language(audio_streams, AUDIO_LANGS)
@@ -613,10 +640,16 @@ def transcode_dir(client, job: dict):
                 fcntl.flock(lock, fcntl.LOCK_EX)
 
                 max_hw_retries = MAX_HW_RETRIES
-                encoders = [
-                    ("qsv", build_qsv_cmd),
-                    ("vaapi", build_vaapi_cmd),
-                ]
+                if video_codec == "vc1":
+                    logging.info("vc1 source detected, skipping qsv decode")
+                    encoders = [
+                        ("vaapi", build_vaapi_cmd),
+                    ]
+                else:
+                    encoders = [
+                        ("qsv", build_qsv_cmd),
+                        ("vaapi", build_vaapi_cmd),
+                    ]
 
                 for encoder_label, cmd_builder in encoders:
                     for attempt in range(0, max_hw_retries + 1):
