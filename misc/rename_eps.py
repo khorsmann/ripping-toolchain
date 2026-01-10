@@ -5,6 +5,7 @@ from pathlib import Path
 import argparse
 
 pattern = re.compile(r"(S\d+E)(\d{2})(\.mkv)$", re.IGNORECASE)
+makemkv_pattern = re.compile(r"(.*S\d+E)_t(\d{2})(\.mkv)$", re.IGNORECASE)
 
 
 def collect_renames(base: Path, offset: int):
@@ -12,6 +13,19 @@ def collect_renames(base: Path, offset: int):
     renames = []
 
     for f in files:
+        m = makemkv_pattern.search(f.name)
+        if m:
+            ep = int(m.group(2))
+            new_ep = ep + offset
+
+            if new_ep < 0:
+                print(f"Übersprungen (negative Episode): {f.name}")
+                continue
+
+            new_name = f"{m.group(1)}{new_ep:02d}{m.group(3)}"
+            renames.append((ep, f, f.with_name(new_name)))
+            continue
+
         m = pattern.search(f.name)
         if not m:
             continue
@@ -47,13 +61,16 @@ Beispiele:
 
   Beliebiges Offset, z.B. -3
     rename_eps.py /pfad/zur/serie --offset -3 --apply
+
+  MakeMKV-Pattern SxxE_tNN (t00 -> E01 mit Offset +1)
+    rename_eps.py /pfad/zur/serie --offset 1 --apply
 """
 
     ap = argparse.ArgumentParser(
         prog="rename_eps.py",
         description=(
-            "Passt Episodennummern in Dateinamen (SxxExx) per Offset an.\n"
-            "Unterstützt Hoch- und Runterzählen."
+            "Passt Episodennummern in Dateinamen per Offset an.\n"
+            "Unterstützt SxxExx sowie MakeMKV-Schema SxxE_tNN."
         ),
         epilog=examples,
         formatter_class=argparse.RawDescriptionHelpFormatter,

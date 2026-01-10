@@ -36,6 +36,20 @@ class CollectRenamesTests(unittest.TestCase):
             self.assertEqual((base / "S01E00.mkv").read_text(encoding="utf-8"), "episode one")
             self.assertEqual((base / "S01E01.mkv").read_text(encoding="utf-8"), "episode two")
 
+    def test_makemkv_pattern(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir)
+            (base / "SHOW-S02E_t00.mkv").touch()
+            (base / "SHOW-S02E_t01.mkv").touch()
+
+            renames = collect_renames(base, offset=1)
+
+            targets = [dst.name for _, _, dst in renames]
+            self.assertEqual(
+                sorted(targets),
+                ["SHOW-S02E01.mkv", "SHOW-S02E02.mkv"],
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
