@@ -391,17 +391,6 @@ def transcode_dir(client, job: dict):
         did_work = True
         logging.info(f"transcoding {mkv} → {out}")
 
-        mqtt_publish(
-            client,
-            MQTT_TOPIC_START,
-            {
-                "version": MQTT_PAYLOAD_VERSION,
-                "file": str(mkv),
-                "output": str(out),
-                "ts": int(time.time()),
-            },
-        )
-
         if interlaced is True:
             interlaced_effective = True
         elif interlaced is False:
@@ -538,6 +527,18 @@ def transcode_dir(client, job: dict):
                             if attempt == 0
                             else f"{encoder_label} retry {attempt}/{max_hw_retries}"
                         )
+                        if attempt == 0:
+                            mqtt_publish(
+                                client,
+                                MQTT_TOPIC_START,
+                                {
+                                    "version": MQTT_PAYLOAD_VERSION,
+                                    "file": str(mkv),
+                                    "output": str(out),
+                                    "encoder": encoder_label,
+                                    "ts": int(time.time()),
+                                },
+                            )
                         logging.info("running ffmpeg with encoder %s", encoder_label)
                         try:
                             subprocess.run(cmd, check=True)
@@ -603,6 +604,17 @@ def transcode_dir(client, job: dict):
                             cleanup_err,
                         )
 
+                mqtt_publish(
+                    client,
+                    MQTT_TOPIC_START,
+                    {
+                        "version": MQTT_PAYLOAD_VERSION,
+                        "file": str(mkv),
+                        "output": str(out),
+                        "encoder": "software",
+                        "ts": int(time.time()),
+                    },
+                )
                 sw_cmd = build_sw_cmd()
                 subprocess.run(sw_cmd, check=True)
 
