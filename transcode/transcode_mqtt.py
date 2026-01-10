@@ -335,7 +335,11 @@ def connect_mqtt(client: mqtt.Client):
 
 
 def build_mqtt_client() -> mqtt.Client:
-    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+    kwargs = {}
+    callback_version = getattr(mqtt, "CallbackAPIVersion", None)
+    if callback_version:
+        kwargs["callback_api_version"] = callback_version.VERSION2
+    client = mqtt.Client(**kwargs)
     client.username_pw_set(MQTT_USER, MQTT_PASSWORD)
     if MQTT_SSL:
         client.tls_set()
