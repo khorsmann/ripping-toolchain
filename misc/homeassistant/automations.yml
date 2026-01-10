@@ -6,11 +6,11 @@
       topic: media/rip/done
   condition:
     - condition: template
-      value_template: "{{ trigger.payload_json.version == 2 }}"
+      value_template: "{{ trigger.payload_json.version == 3 }}"
   action:
     - service: notify.mobile_app_meinphone
       data:
-        title: "DVD fertig gerippt (v2)"
+        title: "DVD fertig gerippt (v3)"
         message: >
           {% set pj = trigger.payload_json %}
           {% set files = pj.files | default([], true) %}
@@ -35,11 +35,11 @@
       topic: media/transcode/done
   condition:
     - condition: template
-      value_template: "{{ trigger.payload_json.version == 2 }}"
+      value_template: "{{ trigger.payload_json.version == 3 }}"
   action:
     - service: notify.mobile_app_meinphone
       data:
-        title: "Transcode fertig (v2)"
+        title: "Transcode fertig (v3)"
         message: >
           {% set pj = trigger.payload_json %}
           {% set file = pj.file | default('', true) %}
@@ -56,11 +56,11 @@
       topic: media/transcode/error
   condition:
     - condition: template
-      value_template: "{{ trigger.payload_json.version == 2 }}"
+      value_template: "{{ trigger.payload_json.version == 3 }}"
   action:
     - service: notify.mobile_app_meinphone
       data:
-        title: "Transcode fehlgeschlagen (v2)"
+        title: "Transcode fehlgeschlagen (v3)"
         message: >
           {% set pj = trigger.payload_json %}
           {% set file = pj.file | default('', true) %}

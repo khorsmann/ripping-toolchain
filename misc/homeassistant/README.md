@@ -1,12 +1,12 @@
 # Home Assistant Automation
 
-Dieses Beispiel zeigt, wie du in Home Assistant eine Push-Benachrichtigung bekommst, sobald der Ripper das MQTT-Event `media/rip/done` sendet (Payload-Version 2).
+Dieses Beispiel zeigt, wie du in Home Assistant eine Push-Benachrichtigung bekommst, sobald der Ripper das MQTT-Event `media/rip/done` sendet (Payload-Version 3).
 
 ## Verwendung
 
 1. Kopiere `automations.yml` (oder den relevanten Abschnitt) in deine bestehende `automations.yaml` innerhalb von Home Assistant.
 2. Passe den Service `notify.mobile_app_meinphone` an den Namen deiner eigenen Companion-App an (z. B. `notify.mobile_app_pixel_7`).
-3. Optional: Ändere Topic oder Nachrichtentext, falls dein Setup andere Topics oder Sprachen nutzt. Die Beispiel-Automation filtert explizit auf `version == 2`.
+3. Optional: Ändere Topic oder Nachrichtentext, falls dein Setup andere Topics oder Sprachen nutzt. Die Beispiel-Automation filtert explizit auf `version == 3`.
 4. Lade die Automationen neu (`Einstellungen → Automatisierungen & Szenen → Automationen neu laden`) oder starte Home Assistant neu.
 
-Sobald der Ripper eine Disc fertig meldet, sendet Home Assistant dir eine Push-Nachricht mit Serien-, Staffel-, Disc- und Episoden-Informationen sowie dem Speicherpfad. Zusätzlich gibt es Beispiele für Transcode-Erfolg (`media/transcode/done`, v2) und Transcode-Fehler (`media/transcode/error`, v2).
+Sobald der Ripper eine Disc fertig meldet, sendet Home Assistant dir eine Push-Nachricht mit Serien-, Staffel-, Disc- und Episoden-Informationen sowie dem Speicherpfad. Zusätzlich gibt es Beispiele für Transcode-Erfolg (`media/transcode/done`, v3) und Transcode-Fehler (`media/transcode/error`, v3).
