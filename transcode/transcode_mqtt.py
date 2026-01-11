@@ -256,10 +256,11 @@ def build_sw_filter(interlaced: bool | None) -> str | None:
     return None
 
 
-def build_qsv_filter(interlaced: bool | None) -> str | None:
-    if interlaced is True:
-        return "vpp_qsv=deinterlace=1"
-    return "vpp_qsv=deinterlace=0"
+def build_qsv_filter(interlaced: bool | None, qsv_direct: bool) -> str | None:
+    deint = "1" if interlaced is True else "0"
+    if qsv_direct:
+        return f"vpp_qsv=deinterlace={deint}"
+    return f"format=nv12,hwupload=extra_hw_frames=64,vpp_qsv=deinterlace={deint}"
 
 
 # --------------------
@@ -294,6 +295,7 @@ ENABLE_SW_FALLBACK = getenv_bool("ENABLE_SW_FALLBACK", "true")
 MAX_HW_RETRIES = max(0, int(getenv("MAX_HW_RETRIES", "2")))
 ENABLE_AAC_DOWNMIX = getenv_bool("ENABLE_AAC_DOWNMIX", "false")
 AUDIO_MODE = getenv("AUDIO_MODE", "auto").strip().lower()
+QSV_DIRECT = getenv_bool("QSV_DIRECT", "false")
 if AUDIO_MODE not in {"auto", "encode", "copy"}:
     raise RuntimeError("AUDIO_MODE must be 'auto', 'encode' or 'copy'")
 AUDIO_LANGS = parse_langs(getenv("AUDIO_LANGS"), "eng,ger,deu")
@@ -547,16 +549,36 @@ def transcode_dir(client, job: dict):
         def build_qsv_cmd() -> list[str]:
             cmd = [
                 FFMPEG_BIN,
-                "-hwaccel",
-                "qsv",
-                "-qsv_device",
-                "/dev/dri/renderD128",
-                "-hwaccel_output_format",
-                "qsv",
-                "-i",
-                str(mkv),
             ]
-            vf = build_qsv_filter(interlaced_effective)
+            if QSV_DIRECT:
+                cmd.extend(
+                    [
+                        "-hwaccel",
+                        "qsv",
+                        "-qsv_device",
+                        "/dev/dri/renderD128",
+                        "-hwaccel_output_format",
+                        "qsv",
+                    ]
+                )
+            else:
+                cmd.extend(
+                    [
+                        "-init_hw_device",
+                        "vaapi=va:/dev/dri/renderD128",
+                        "-init_hw_device",
+                        "qsv=hw@va",
+                        "-filter_hw_device",
+                        "hw",
+                    ]
+                )
+            cmd.extend(
+                [
+                    "-i",
+                    str(mkv),
+                ]
+            )
+            vf = build_qsv_filter(interlaced_effective, QSV_DIRECT)
             if vf:
                 cmd.extend(["-vf", vf])
             cmd.extend(maps)

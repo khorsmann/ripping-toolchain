@@ -106,6 +106,18 @@ class TestTranscodeHelpers(unittest.TestCase):
         self.assertIsNone(build_sw_filter(False))
         self.assertIsNone(build_sw_filter(None))
 
+    def test_build_qsv_filter(self):
+        build_qsv_filter = self.transcode.build_qsv_filter
+        self.assertEqual(
+            build_qsv_filter(True, False),
+            "format=nv12,hwupload=extra_hw_frames=64,vpp_qsv=deinterlace=1",
+        )
+        self.assertEqual(
+            build_qsv_filter(False, False),
+            "format=nv12,hwupload=extra_hw_frames=64,vpp_qsv=deinterlace=0",
+        )
+        self.assertEqual(build_qsv_filter(True, True), "vpp_qsv=deinterlace=1")
+
     def test_probe_video_codec(self):
         probe_video_codec = self.transcode.probe_video_codec
         with mock.patch.object(self.transcode.subprocess, "check_output") as mocked:

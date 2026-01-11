@@ -11,6 +11,10 @@ if [[ -z "${FFMPEG_BIN}" ]]; then
 fi
 
 echo "Using ffmpeg: ${FFMPEG_BIN}"
+if [[ -z "${LIBVA_DRIVER_NAME:-}" ]]; then
+  export LIBVA_DRIVER_NAME="iHD"
+fi
+echo "LIBVA_DRIVER_NAME=${LIBVA_DRIVER_NAME}"
 echo "User: $(id)"
 echo "DRI nodes:"
 ls -l /dev/dri || true
@@ -35,11 +39,11 @@ echo
 echo "== QSV smoke test (progressive) =="
 set +e
 "${FFMPEG_BIN}" \
-  -hwaccel qsv \
-  -qsv_device /dev/dri/renderD128 \
-  -hwaccel_output_format qsv \
+  -init_hw_device vaapi=va:/dev/dri/renderD128 \
+  -init_hw_device qsv=hw@va \
+  -filter_hw_device hw \
   -f lavfi -i testsrc2=size=1280x720:rate=30 \
-  -vf "vpp_qsv=deinterlace=0" \
+  -vf "format=nv12,hwupload=extra_hw_frames=64,vpp_qsv=deinterlace=0" \
   -t 2 \
   -c:v h264_qsv \
   -f null -
@@ -57,11 +61,11 @@ echo
 echo "== QSV smoke test (deinterlace) =="
 set +e
 "${FFMPEG_BIN}" \
-  -hwaccel qsv \
-  -qsv_device /dev/dri/renderD128 \
-  -hwaccel_output_format qsv \
+  -init_hw_device vaapi=va:/dev/dri/renderD128 \
+  -init_hw_device qsv=hw@va \
+  -filter_hw_device hw \
   -f lavfi -i testsrc2=size=1280x720:rate=30 \
-  -vf "vpp_qsv=deinterlace=1" \
+  -vf "format=nv12,hwupload=extra_hw_frames=64,vpp_qsv=deinterlace=1" \
   -t 2 \
   -c:v h264_qsv \
   -f null -
