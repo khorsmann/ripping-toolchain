@@ -85,11 +85,15 @@ def find_source_type_marker(start_dir: Path, stop_dir: Path) -> str | None:
     return None
 
 
-def probe_source_type(path: Path) -> str | None:
-    """
-    Uses ffprobe height as a heuristic: <=576 -> dvd, >=720 -> bluray.
-    Returns None if detection fails.
-    """
+def classify_height(height: int) -> str | None:
+    if height <= 576:
+        return "dvd"
+    if height >= 720:
+        return "bluray"
+    return None
+
+
+def probe_height(path: Path) -> int | None:
     try:
         out = subprocess.check_output(
             [
@@ -107,26 +111,51 @@ def probe_source_type(path: Path) -> str | None:
             stderr=subprocess.DEVNULL,
         )
         height_raw = out.decode().strip()
-        height = int(height_raw)
+        return int(height_raw)
     except Exception as e:
         logging.warning("ffprobe height failed for %s: %s", path, e)
         return None
 
-    if height <= 576:
-        return "dvd"
-    if height >= 720:
-        return "bluray"
-    return None
 
-
-def detect_source_type(start_dir: Path, stop_dir: Path, fallback: str, sample: Path) -> str:
+def detect_source_type(
+    start_dir: Path,
+    stop_dir: Path,
+    fallback: str,
+    sample: Path,
+    sample_height: int | None = None,
+) -> str:
     marker = find_source_type_marker(start_dir, stop_dir)
     if marker:
         return marker
-    probed = probe_source_type(sample)
-    if probed:
-        return probed
+    height = sample_height
+    if height is None:
+        height = probe_height(sample)
+    if height is not None:
+        probed = classify_height(height)
+        if probed:
+            return probed
     return fallback
+
+
+def filter_ready_mkvs(
+    mkvs: List[Path],
+    allow_failures: bool,
+) -> Tuple[List[Path], List[Path], int | None]:
+    ready: List[Path] = []
+    dropped: List[Path] = []
+    sample_height: int | None = None
+    for mkv in mkvs:
+        height = probe_height(mkv)
+        if height is None:
+            if allow_failures:
+                ready.append(mkv)
+            else:
+                dropped.append(mkv)
+            continue
+        ready.append(mkv)
+        if sample_height is None:
+            sample_height = height
+    return ready, dropped, sample_height
 
 
 def build_mqtt_client() -> mqtt.Client:
@@ -259,6 +288,11 @@ def main():
         default="/etc/transcode-mqtt.env",
         help="Pfad zu einer KEY=VALUE Env-Datei (überschreibt fehlende Variablen)",
     )
+    parser.add_argument(
+        "--allow-ffprobe-failures",
+        action="store_true",
+        help="FFprobe-Fehler ignorieren und Dateien trotzdem publishen",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -371,29 +405,61 @@ def main():
         source_root = result["source_root"]
         source_type_default = result["source_type"]
         for src_dir, mkvs in sorted(result["series_dirs"].items()):
+            ready_mkvs, dropped_mkvs, sample_height = filter_ready_mkvs(
+                mkvs, args.allow_ffprobe_failures
+            )
+            if dropped_mkvs and not args.allow_ffprobe_failures:
+                logging.info(
+                    "dropping %d files from %s due to ffprobe errors: %s",
+                    len(dropped_mkvs),
+                    src_dir,
+                    ", ".join(str(p) for p in dropped_mkvs),
+                )
+            if not ready_mkvs:
+                logging.info(
+                    "skip %s because all files failed ffprobe",
+                    src_dir,
+                )
+                continue
             source_type = detect_source_type(
-                src_dir, source_root, source_type_default, mkvs[0]
+                src_dir, source_root, source_type_default, ready_mkvs[0], sample_height
             )
             payload = {
                 "version": MQTT_PAYLOAD_VERSION,
                 "mode": "series",
                 "source_type": source_type,
                 "path": str(src_dir.resolve()),
-                "files": [str(p.resolve()) for p in mkvs],
+                "files": [str(p.resolve()) for p in ready_mkvs],
                 "interlaced": None,
             }
             mqtt_publish(client, MQTT_TOPIC, payload, args.dry_run)
 
         for parent, mkvs in sorted(result["movie_dirs"].items()):
+            ready_mkvs, dropped_mkvs, sample_height = filter_ready_mkvs(
+                mkvs, args.allow_ffprobe_failures
+            )
+            if dropped_mkvs and not args.allow_ffprobe_failures:
+                logging.info(
+                    "dropping %d files from %s due to ffprobe errors: %s",
+                    len(dropped_mkvs),
+                    parent,
+                    ", ".join(str(p) for p in dropped_mkvs),
+                )
+            if not ready_mkvs:
+                logging.info(
+                    "skip %s because all files failed ffprobe",
+                    parent,
+                )
+                continue
             source_type = detect_source_type(
-                parent, source_root, source_type_default, mkvs[0]
+                parent, source_root, source_type_default, ready_mkvs[0], sample_height
             )
             payload = {
                 "version": MQTT_PAYLOAD_VERSION,
                 "mode": "movie",
                 "source_type": source_type,
                 "path": str(parent.resolve()),
-                "files": [str(p.resolve()) for p in mkvs],
+                "files": [str(p.resolve()) for p in ready_mkvs],
                 "interlaced": None,
             }
             mqtt_publish(client, MQTT_TOPIC, payload, args.dry_run)

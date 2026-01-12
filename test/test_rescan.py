@@ -38,15 +38,21 @@ class TestRescanHelpers(unittest.TestCase):
             result = find_source_type_marker(leaf, base)
             self.assertEqual(result, parse_source_type("bluray"))
 
-    def test_probe_source_type(self):
-        probe_source_type = self.rescan.probe_source_type
+    def test_classify_height(self):
+        classify_height = self.rescan.classify_height
+        self.assertEqual(classify_height(576), "dvd")
+        self.assertEqual(classify_height(1080), "bluray")
+        self.assertIsNone(classify_height(640))
+
+    def test_probe_height(self):
+        probe_height = self.rescan.probe_height
         with mock.patch.object(self.rescan.subprocess, "check_output") as mocked:
             mocked.return_value = b"576\n"
-            self.assertEqual(probe_source_type(Path("dummy.mkv")), "dvd")
+            self.assertEqual(probe_height(Path("dummy.mkv")), 576)
             mocked.return_value = b"1080\n"
-            self.assertEqual(probe_source_type(Path("dummy.mkv")), "bluray")
+            self.assertEqual(probe_height(Path("dummy.mkv")), 1080)
             mocked.return_value = b"640\n"
-            self.assertIsNone(probe_source_type(Path("dummy.mkv")))
+            self.assertEqual(probe_height(Path("dummy.mkv")), 640)
 
     def test_detect_source_type_prefers_marker_then_probe_then_fallback(self):
         detect_source_type = self.rescan.detect_source_type
@@ -55,22 +61,44 @@ class TestRescanHelpers(unittest.TestCase):
             leaf = base / "a"
             leaf.mkdir()
             (base / ".source_type").write_text("dvd")
-            with mock.patch.object(self.rescan, "probe_source_type") as mocked:
-                mocked.return_value = "bluray"
+            with mock.patch.object(self.rescan, "probe_height") as mocked:
+                mocked.return_value = 1080
                 result = detect_source_type(leaf, base, "bluray", Path("dummy.mkv"))
                 self.assertEqual(result, "dvd")
                 mocked.assert_not_called()
 
             (base / ".source_type").unlink()
-            with mock.patch.object(self.rescan, "probe_source_type") as mocked:
-                mocked.return_value = "bluray"
+            with mock.patch.object(self.rescan, "probe_height") as mocked:
+                mocked.return_value = 1080
                 result = detect_source_type(leaf, base, "dvd", Path("dummy.mkv"))
                 self.assertEqual(result, "bluray")
 
-            with mock.patch.object(self.rescan, "probe_source_type") as mocked:
+            with mock.patch.object(self.rescan, "probe_height") as mocked:
                 mocked.return_value = None
                 result = detect_source_type(leaf, base, "dvd", Path("dummy.mkv"))
                 self.assertEqual(result, "dvd")
+
+    def test_filter_ready_mkvs_drops_failures_by_default(self):
+        filter_ready_mkvs = self.rescan.filter_ready_mkvs
+        with mock.patch.object(self.rescan, "probe_height") as mocked:
+            mocked.side_effect = [None, 720]
+            ready, dropped, sample_height = filter_ready_mkvs(
+                [Path("bad.mkv"), Path("good.mkv")], allow_failures=False
+            )
+        self.assertEqual(ready, [Path("good.mkv")])
+        self.assertEqual(dropped, [Path("bad.mkv")])
+        self.assertEqual(sample_height, 720)
+
+    def test_filter_ready_mkvs_allows_failures_with_flag(self):
+        filter_ready_mkvs = self.rescan.filter_ready_mkvs
+        with mock.patch.object(self.rescan, "probe_height") as mocked:
+            mocked.side_effect = [None, 720]
+            ready, dropped, sample_height = filter_ready_mkvs(
+                [Path("bad.mkv"), Path("good.mkv")], allow_failures=True
+            )
+        self.assertEqual(ready, [Path("bad.mkv"), Path("good.mkv")])
+        self.assertEqual(dropped, [])
+        self.assertEqual(sample_height, 720)
 
     def test_main_builds_v3_payloads(self):
         rescan = self.rescan
@@ -116,12 +144,14 @@ class TestRescanHelpers(unittest.TestCase):
                         with mock.patch.object(rescan, "mqtt_publish", side_effect=fake_publish):
                             with mock.patch.object(rescan, "detect_source_type") as detect_type:
                                 detect_type.return_value = "dvd"
-                                with mock.patch.object(
-                                    rescan, "load_env_file"
-                                ) as load_env_file:
-                                    load_env_file.return_value = None
-                                    with mock.patch.object(rescan.sys, "argv", ["rescan.py"]):
-                                        rescan.main()
+                                with mock.patch.object(rescan, "probe_height") as probe_height:
+                                    probe_height.return_value = 576
+                                    with mock.patch.object(
+                                        rescan, "load_env_file"
+                                    ) as load_env_file:
+                                        load_env_file.return_value = None
+                                        with mock.patch.object(rescan.sys, "argv", ["rescan.py"]):
+                                            rescan.main()
 
             self.assertEqual(len(payloads), 2)
             for payload in payloads:
