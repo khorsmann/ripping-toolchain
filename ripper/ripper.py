@@ -317,6 +317,10 @@ def main():
         "--iso", help="ISO-Datei als Quelle verwenden (statt physischem Laufwerk)"
     )
     ap.add_argument(
+        "--vob-dir",
+        help="Verzeichnis mit VOB-Dateien als Quelle verwenden (statt physischem Laufwerk)",
+    )
+    ap.add_argument(
         "--dvd",
         action="store_true",
         help="Bei Blu-ray-Laufwerk als DVD behandeln (überschreibt device type)",
@@ -324,7 +328,9 @@ def main():
 
     args = ap.parse_args()
     movie_mode = bool(args.movie_name and args.movie_name.strip())
-    iso_mode = bool(args.iso)
+    if args.iso and args.vob_dir:
+        ap.error("--iso und --vob-dir können nicht gleichzeitig verwendet werden.")
+    iso_mode = bool(args.iso or args.vob_dir)
 
     if not movie_mode:
         required_fields = ("series", "season", "disc", "episode_start")
@@ -344,11 +350,21 @@ def main():
     device_type = config["dvd"]["type"]
 
     if iso_mode:
-        iso_path = Path(args.iso).expanduser()
-        if not iso_path.is_file():
-            ap.error(f"ISO-Datei nicht gefunden: {iso_path}")
-        disc_target = f"file:{iso_path}"
-        source_label = iso_path
+        if args.iso:
+            iso_path = Path(args.iso).expanduser()
+            if not iso_path.is_file():
+                ap.error(f"ISO-Datei nicht gefunden: {iso_path}")
+            disc_target = f"file:{iso_path}"
+            source_label = iso_path
+        else:
+            vob_path = Path(args.vob_dir).expanduser()
+            if not vob_path.is_dir():
+                ap.error(f"VOB-Verzeichnis nicht gefunden: {vob_path}")
+            has_vob = any(p.suffix.lower() == ".vob" for p in vob_path.iterdir())
+            if not has_vob:
+                ap.error(f"Keine VOB-Dateien gefunden in: {vob_path}")
+            disc_target = f"file:{vob_path}"
+            source_label = vob_path
     else:
         disc_target = dvd_device_to_disc_target(device)
         source_label = disc_target

@@ -28,15 +28,16 @@ transcode_mqtt (FFmpeg) <--- MQTT subscription
 ## Komponenten & Zusammenspiel
 
 1. **Ripper starten**  
-   ```
-   ./ripper/ripper.py \
-     --series Dein_toller_Serietitle \
-     --season 02 \
-     --disc disc07 \
+  ```
+  ./ripper/ripper.py \
+    --series Dein_toller_Serietitle \
+    --season 02 \
+    --disc disc07 \
      --episode-start 23 \
      --config ripper/ripper.toml
-   ```
+  ```
   - Liest `ripper.toml` (MQTT, DVD-Gerät, Storage, Heuristik) und prüft zuerst die MQTT-Konnektivität.
+  - Optional kann die Quelle statt des Laufwerks als ISO (`--iso /pfad/disc.iso`) oder als VOB-Verzeichnis (`--vob-dir /pfad/VIDEO_TS`) angegeben werden.
   - Die Heuristik erlaubt eine minimale (`min_episode_minutes`) und optional maximale (`max_episode_minutes`) Laufzeit, sodass Komplett-Disc-Titel (z. B. „title 0“ mit allen Episoden) ignoriert werden können; mit `--movie-name <Titel>` lässt sich der Film-Modus aktivieren, bei dem nur die Mindestlaufzeit greift.
   - Im Film-Modus entfallen `--series`, `--season`, `--disc` und `--episode-start`; die Datei wird als `<base_raw>/<source_type>/<movie_path>/<Titel>.mkv` (inkl. Info-Datei) abgelegt – `movie_path` stammt aus der Storage-Config (Default `Filme`), `<Titel>` ist der übergebene (normalisierte) `--movie-name`.
   - Ruft `makemkvcon` (`info` und `mkv`) auf, benennt die erzeugten Dateien um und legt Serien unter `<base_raw>/<source_type>/<series_path>/<Serie>/S<Staffel>/<Disc>` ab (Default `series_path = "Serien"`).
