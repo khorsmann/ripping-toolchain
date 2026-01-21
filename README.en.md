@@ -80,4 +80,5 @@ transcode_mqtt (FFmpeg) <--- MQTT subscription
 
 - Both components assume `series_path` (ripper) and `SERIES_SUBPATH` (transcode) match. If `SRC_BASE` has no subfolders, series live under `SRC_BASE/<SERIES_SUBPATH>`; if `SRC_BASE` contains `dvd/` or `bluray/`, the layout lives under `SRC_BASE/<source_type>/<SERIES_SUBPATH>`. Movies are exempt and live together under `MOVIE_DST_BASE`.
 - MQTT topics can be adjusted via environment variables; defaults are `media/rip/done` for inputs and `media/transcode/*` for status.
+- For fixing wrong aspect ratios, use `misc/fix-aspect.py` (sets DAR via `mkvpropedit` for explicitly specified files/directories).
 - The workflow exists solely to digitize personally purchased media for private use. Respect third-party rights (DRM, copyright); sharing or publicly providing ripped/transcoded files is not intended.
