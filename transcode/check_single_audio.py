@@ -43,7 +43,9 @@ def main() -> int:
     )
     ap.add_argument("root", type=Path, help="Root folder to scan recursively")
     ap.add_argument("--ffprobe", default="ffprobe", help="Path to ffprobe")
-    ap.add_argument("--ext", default=".mkv", help="File extension filter (default .mkv)")
+    ap.add_argument(
+        "--ext", default=".mkv", help="File extension filter (default .mkv)"
+    )
     args = ap.parse_args()
 
     root = args.root

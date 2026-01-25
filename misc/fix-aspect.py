@@ -7,6 +7,7 @@ Beispiele:
   ./misc/fix-aspect.py --aspect 16:9 /media/raw/dvd/Serien/Star_Trek-Enterprise/S02/02
   ./misc/fix-aspect.py --aspect 4:3 --dry-run /path/zu/datei.mkv
 """
+
 # Behalte Future-Annotationen, falls das Skript mal auf älteren 3.x-Umgebungen landet.
 from __future__ import annotations
 

@@ -6,6 +6,7 @@ DVD-Ripper für MakeMKV (CLI) + MQTT-Trigger
 - Rippt alle passenden Titel mit MakeMKV
 - Sendet am Ende eine MQTT-Nachricht
 """
+
 import argparse
 import json
 import re

@@ -145,12 +145,16 @@ def main() -> int:
     series_subpath = Path(getenv("SERIES_SUBPATH", "Serien"))
     if series_subpath.is_absolute():
         raise RuntimeError("SERIES_SUBPATH must be relative")
-    series_dst_base = Path(getenv("SERIES_DST_BASE", "/media/Serien")).expanduser().resolve()
+    series_dst_base = (
+        Path(getenv("SERIES_DST_BASE", "/media/Serien")).expanduser().resolve()
+    )
 
     movie_subpath = Path(getenv("MOVIE_SUBPATH", "Filme"))
     if movie_subpath.is_absolute():
         raise RuntimeError("MOVIE_SUBPATH must be relative")
-    movie_dst_base = Path(getenv("MOVIE_DST_BASE", "/media/Filme")).expanduser().resolve()
+    movie_dst_base = (
+        Path(getenv("MOVIE_DST_BASE", "/media/Filme")).expanduser().resolve()
+    )
 
     source_type_default = getenv("SOURCE_TYPE", "dvd").strip().lower()
     if source_type_default not in {"dvd", "bluray"}:
@@ -225,9 +229,7 @@ def main() -> int:
     if probe_errors:
         print(f"\nProbe errors ({len(probe_errors)}):")
         for kind, rel, src, dst, s_dur, d_dur in probe_errors:
-            print(
-                f"  [{kind}] {src} -> {dst} (src dur={s_dur}, dst dur={d_dur})"
-            )
+            print(f"  [{kind}] {src} -> {dst} (src dur={s_dur}, dst dur={d_dur})")
     if mismatches:
         print(f"\nDuration mismatches ({len(mismatches)}):")
         for kind, rel, src, dst, s_dur, d_dur, tol in mismatches:

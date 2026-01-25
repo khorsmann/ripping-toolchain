@@ -13,10 +13,22 @@ import ripper
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Anzeige der Makemkv-Titelinfos aus einer .info Datei")
+    parser = argparse.ArgumentParser(
+        description="Anzeige der Makemkv-Titelinfos aus einer .info Datei"
+    )
     parser.add_argument("info_file", help="Pfad zur .info Datei (Makemkv output)")
-    parser.add_argument("--min-minutes", type=int, default=None, help="Nur Titel ab dieser Dauer (Minuten)")
-    parser.add_argument("--max-minutes", type=int, default=None, help="Nur Titel bis zu dieser Dauer (Minuten)")
+    parser.add_argument(
+        "--min-minutes",
+        type=int,
+        default=None,
+        help="Nur Titel ab dieser Dauer (Minuten)",
+    )
+    parser.add_argument(
+        "--max-minutes",
+        type=int,
+        default=None,
+        help="Nur Titel bis zu dieser Dauer (Minuten)",
+    )
     args = parser.parse_args()
 
     info_path = Path(args.info_file).expanduser()
@@ -44,7 +56,9 @@ def main() -> int:
     for t in filtered:
         chapters = t.get("chapters", "")
         chapters_txt = f" chapters={chapters}" if chapters else ""
-        print(f"id={t['title_id']:02d} duration={t['duration']:>8} minutes={t['minutes']:3d}{chapters_txt}")
+        print(
+            f"id={t['title_id']:02d} duration={t['duration']:>8} minutes={t['minutes']:3d}{chapters_txt}"
+        )
 
     return 0
 

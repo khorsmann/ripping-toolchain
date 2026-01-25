@@ -160,7 +160,9 @@ class TestRipperVobDir(unittest.TestCase):
 
             with mock.patch.object(self.ripper.sys, "argv", argv):
                 with mock.patch.object(self.ripper, "run", side_effect=fake_run):
-                    with mock.patch.object(self.ripper, "mqtt_test_connection", return_value=False):
+                    with mock.patch.object(
+                        self.ripper, "mqtt_test_connection", return_value=False
+                    ):
                         with mock.patch.object(self.ripper, "mqtt_publish"):
                             with mock.patch.object(self.ripper.time, "sleep"):
                                 self.ripper.main()

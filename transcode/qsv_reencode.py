@@ -13,16 +13,22 @@ RENDER_NODE = "/dev/dri/renderD128"
 
 
 def run(cmd: list[str]) -> subprocess.CompletedProcess:
-    return subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    return subprocess.run(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+    )
 
 
 def ffprobe_field_order(ffprobe_bin: str, infile: Path) -> str:
     cmd = [
         ffprobe_bin,
-        "-v", "error",
-        "-select_streams", "v:0",
-        "-show_entries", "stream=field_order",
-        "-of", "csv=p=0",
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "stream=field_order",
+        "-of",
+        "csv=p=0",
         str(infile),
     ]
     p = run(cmd)
@@ -39,12 +45,17 @@ def is_interlaced(field_order: str) -> bool:
     return fo not in ("progressive", "unknown", "")
 
 
-def build_ffmpeg_cmd(ffmpeg_bin: str, infile: Path, outfile: Path, global_quality: int) -> list[str]:
+def build_ffmpeg_cmd(
+    ffmpeg_bin: str, infile: Path, outfile: Path, global_quality: int
+) -> list[str]:
     # QSV init via VAAPI -> QSV (works in your environment)
     hw_init = [
-        "-init_hw_device", f"vaapi=va:{RENDER_NODE}",
-        "-init_hw_device", "qsv=qsv@va",
-        "-filter_hw_device", "qsv",
+        "-init_hw_device",
+        f"vaapi=va:{RENDER_NODE}",
+        "-init_hw_device",
+        "qsv=qsv@va",
+        "-filter_hw_device",
+        "qsv",
     ]
 
     # 25p deinterlace, then upload for QSV encode
@@ -55,17 +66,28 @@ def build_ffmpeg_cmd(ffmpeg_bin: str, infile: Path, outfile: Path, global_qualit
         "-hide_banner",
         "-y",
         *hw_init,
-        "-i", str(infile),
-        "-map", "0",
-        "-map_metadata", "0",
-        "-map_chapters", "0",
-        "-vf", vf,
-        "-c:v", "hevc_qsv",
-        "-preset", "medium",
-        "-global_quality", str(global_quality),
-        "-look_ahead", "1",
-        "-c:a", "copy",
-        "-c:s", "copy",
+        "-i",
+        str(infile),
+        "-map",
+        "0",
+        "-map_metadata",
+        "0",
+        "-map_chapters",
+        "0",
+        "-vf",
+        vf,
+        "-c:v",
+        "hevc_qsv",
+        "-preset",
+        "medium",
+        "-global_quality",
+        str(global_quality),
+        "-look_ahead",
+        "1",
+        "-c:a",
+        "copy",
+        "-c:s",
+        "copy",
         str(outfile),
     ]
 
@@ -73,7 +95,9 @@ def build_ffmpeg_cmd(ffmpeg_bin: str, infile: Path, outfile: Path, global_qualit
 def atomic_replace(src_tmp: Path, dst_final: Path, keep_backup: bool) -> None:
     # Ensure same directory for atomic rename
     if src_tmp.parent != dst_final.parent:
-        raise RuntimeError("Temp file must be in the same directory as destination for atomic replace")
+        raise RuntimeError(
+            "Temp file must be in the same directory as destination for atomic replace"
+        )
 
     backup = dst_final.with_suffix(dst_final.suffix + ".bak")
 
@@ -87,8 +111,14 @@ def atomic_replace(src_tmp: Path, dst_final: Path, keep_backup: bool) -> None:
         os.replace(src_tmp, dst_final)
 
 
-def process_file(ffmpeg_bin: str, ffprobe_bin: str, infile: Path, global_quality: int,
-                 dry_run: bool, keep_backup: bool) -> bool:
+def process_file(
+    ffmpeg_bin: str,
+    ffprobe_bin: str,
+    infile: Path,
+    global_quality: int,
+    dry_run: bool,
+    keep_backup: bool,
+) -> bool:
     field_order = ffprobe_field_order(ffprobe_bin, infile)
     if not is_interlaced(field_order):
         print(f"SKIP (not interlaced): {infile} [field_order={field_order}]")
@@ -145,15 +175,31 @@ def process_file(ffmpeg_bin: str, ffprobe_bin: str, infile: Path, global_quality
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Recursive QSV deinterlace+transcode (Voyager DVD PAL friendly), then replace originals.")
+    ap = argparse.ArgumentParser(
+        description="Recursive QSV deinterlace+transcode (Voyager DVD PAL friendly), then replace originals."
+    )
     ap.add_argument("root", type=Path, help="Root folder to scan recursively")
     ap.add_argument("--ffmpeg", default=JELLYFIN_FFMPEG, help="Path to jellyfin ffmpeg")
-    ap.add_argument("--ffprobe", default=JELLYFIN_FFPROBE, help="Path to jellyfin ffprobe")
-    ap.add_argument("--global-quality", type=int, default=16,
-                    help="QSV global_quality (lower=better/larger). Typical SD: 14-20. Default 16.")
-    ap.add_argument("--ext", default=".mkv", help="File extension filter (default .mkv)")
-    ap.add_argument("--dry-run", action="store_true", help="Print actions/commands, do not encode/replace")
-    ap.add_argument("--keep-backup", action="store_true", help="Keep a .bak of the original file")
+    ap.add_argument(
+        "--ffprobe", default=JELLYFIN_FFPROBE, help="Path to jellyfin ffprobe"
+    )
+    ap.add_argument(
+        "--global-quality",
+        type=int,
+        default=16,
+        help="QSV global_quality (lower=better/larger). Typical SD: 14-20. Default 16.",
+    )
+    ap.add_argument(
+        "--ext", default=".mkv", help="File extension filter (default .mkv)"
+    )
+    ap.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print actions/commands, do not encode/replace",
+    )
+    ap.add_argument(
+        "--keep-backup", action="store_true", help="Keep a .bak of the original file"
+    )
     args = ap.parse_args()
 
     root = args.root
@@ -181,7 +227,14 @@ def main() -> int:
             continue
 
         processed += 1
-        ok = process_file(args.ffmpeg, args.ffprobe, path, args.global_quality, args.dry_run, args.keep_backup)
+        ok = process_file(
+            args.ffmpeg,
+            args.ffprobe,
+            path,
+            args.global_quality,
+            args.dry_run,
+            args.keep_backup,
+        )
         if ok:
             changed += 1
 

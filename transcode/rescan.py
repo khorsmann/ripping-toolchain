@@ -8,6 +8,7 @@ Beispiel:
   MQTT_HOST=broker MQTT_USER=user MQTT_PASSWORD=pass \\
   ./transcode/rescan.py --dry-run
 """
+
 # Behalte Future-Annotationen, falls das Skript mal auf älteren 3.x-Umgebungen landet.
 from __future__ import annotations
 
@@ -378,8 +379,7 @@ def main():
             logging.info(
                 "skipped temp files: %s",
                 ", ".join(
-                    str(p)
-                    for p in sorted(series_skipped_all + movie_skipped_all)
+                    str(p) for p in sorted(series_skipped_all + movie_skipped_all)
                 ),
             )
         return
@@ -393,9 +393,7 @@ def main():
     if series_skipped_all or movie_skipped_all:
         logging.info(
             "skipped temp files: %s",
-            ", ".join(
-                str(p) for p in sorted(series_skipped_all + movie_skipped_all)
-            ),
+            ", ".join(str(p) for p in sorted(series_skipped_all + movie_skipped_all)),
         )
 
     client = build_mqtt_client()

@@ -31,6 +31,12 @@ def getenv_bool(name, default="false"):
 
 
 TEMP_MKV_RE = re.compile(r"^[A-Za-z0-9]{2}_[A-Za-z][0-9]{2}\.mkv$", re.IGNORECASE)
+IDET_SINGLE_RE = re.compile(
+    r"Single frame detection:\s*TFF:\s*(\d+)\s*BFF:\s*(\d+)\s*Progressive:\s*(\d+)\s*Undetermined:\s*(\d+)"
+)
+IDET_MULTI_RE = re.compile(
+    r"Multi frame detection:\s*TFF:\s*(\d+)\s*BFF:\s*(\d+)\s*Progressive:\s*(\d+)\s*Undetermined:\s*(\d+)"
+)
 
 
 def is_temp_mkv(path: Path) -> bool:
@@ -61,11 +67,58 @@ def probe_duration(path: Path) -> float | None:
         return None
 
 
+def parse_idet_counts(output: str) -> tuple[int, int, int, int] | None:
+    multi = IDET_MULTI_RE.search(output)
+    if multi:
+        return tuple(int(val) for val in multi.groups())
+    single = IDET_SINGLE_RE.search(output)
+    if single:
+        return tuple(int(val) for val in single.groups())
+    return None
+
+
+def run_idet(path: Path, frames: int) -> tuple[int, int, int, int] | None:
+    cmd = [
+        FFMPEG_BIN,
+        "-hide_banner",
+        "-v",
+        "info",
+        "-i",
+        str(path),
+        "-an",
+        "-vf",
+        "idet",
+        "-frames:v",
+        str(frames),
+        "-f",
+        "null",
+        "-",
+    ]
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if proc.returncode != 0:
+        logging.warning("ffmpeg idet failed for %s: %s", path, proc.stderr.strip())
+        return None
+    return parse_idet_counts(proc.stderr)
+
+
+def decide_idet(counts: tuple[int, int, int, int]) -> bool | None:
+    tff, bff, progressive, _undetermined = counts
+    interlaced = tff + bff
+    if interlaced == 0 and progressive == 0:
+        return None
+    if interlaced > progressive:
+        return True
+    if progressive > interlaced:
+        return False
+    return None
+
+
 def detect_interlaced(path: Path) -> bool | None:
     """
-    Returns True if ffprobe reports an interlaced field_order, False if not,
+    Returns True if metadata or idet indicates interlaced, False if progressive,
     None when detection fails.
     """
+    field_order = ""
     try:
         out = subprocess.check_output(
             [
@@ -83,14 +136,31 @@ def detect_interlaced(path: Path) -> bool | None:
             stderr=subprocess.DEVNULL,
         ).decode()
         field_order = out.strip().lower()
-        interlaced = {"tt", "bb", "tb", "bt"}
-        if field_order in interlaced:
-            logging.info("detected interlaced video (%s) for %s", field_order, path)
-            return True
-        if field_order:
-            return False
     except Exception as e:
         logging.warning("ffprobe field_order failed for %s: %s", path, e)
+
+    interlaced_meta = {"tt", "bb", "tb", "bt"}
+    if field_order in interlaced_meta:
+        logging.info("detected interlaced video (%s) for %s", field_order, path)
+        return True
+
+    frames = max(50, int(getenv("IDET_FRAMES", "500")))
+    idet_counts = run_idet(path, frames)
+    idet_decision = decide_idet(idet_counts) if idet_counts else None
+
+    if idet_decision is True:
+        logging.info("idet indicates interlaced for %s", path)
+        return True
+    if idet_decision is False:
+        logging.info("idet indicates progressive for %s", path)
+        return False
+
+    if field_order == "progressive":
+        return False
+    if field_order in {"unknown", ""}:
+        return True
+    if field_order:
+        return False
     return None
 
 
@@ -191,6 +261,7 @@ def probe_video_codec(path: Path) -> str | None:
         logging.warning("ffprobe video codec failed for %s: %s", path, e)
         return None
 
+
 def build_audio_args(
     output_index: int, channels: int | None, source_type: str
 ) -> list[str]:
@@ -238,10 +309,13 @@ def filter_streams_by_language(streams: list[dict], allowed: set[str]) -> list[d
     return filtered
 
 
+BWDIF_FILTER = "bwdif=mode=send_frame:parity=auto:deint=all"
+
+
 def build_video_filter(interlaced: bool | None, hwupload: bool) -> str | None:
     filters = []
     if interlaced is True:
-        filters.append("bwdif")
+        filters.append(BWDIF_FILTER)
     if hwupload:
         filters.append("format=p010le")
         filters.append("hwupload=extra_hw_frames=64")
@@ -252,15 +326,16 @@ def build_video_filter(interlaced: bool | None, hwupload: bool) -> str | None:
 
 def build_sw_filter(interlaced: bool | None) -> str | None:
     if interlaced is True:
-        return "bwdif"
+        return BWDIF_FILTER
     return None
 
 
 def build_qsv_filter(interlaced: bool | None, qsv_direct: bool) -> str | None:
-    deint = "1" if interlaced is True else "0"
+    if interlaced is not True:
+        return None
     if qsv_direct:
-        return f"vpp_qsv=deinterlace={deint}"
-    return f"format=nv12,hwupload=extra_hw_frames=64,vpp_qsv=deinterlace={deint}"
+        return f"vpp_qsv=deinterlace=1"
+    return f"{BWDIF_FILTER},format=nv12,hwupload=extra_hw_frames=64"
 
 
 # --------------------
@@ -517,7 +592,9 @@ def transcode_dir(client, job: dict):
             if audio_mode_effective == "copy":
                 continue
             audio_args.extend(
-                build_audio_args(output_audio_index, stream.get("channels"), source_type)
+                build_audio_args(
+                    output_audio_index, stream.get("channels"), source_type
+                )
             )
             output_audio_index += 1
 
@@ -883,11 +960,15 @@ def on_message(client, userdata, msg):
             return
         source_type = payload.get("source_type")
         if source_type not in {"dvd", "bluray"}:
-            logging.warning("payload has invalid source_type '%s', skipping", source_type)
+            logging.warning(
+                "payload has invalid source_type '%s', skipping", source_type
+            )
             return
         interlaced = payload.get("interlaced")
         if interlaced is not None and not isinstance(interlaced, bool):
-            logging.warning("payload has invalid interlaced flag '%s', skipping", interlaced)
+            logging.warning(
+                "payload has invalid interlaced flag '%s', skipping", interlaced
+            )
             return
 
         logging.info(

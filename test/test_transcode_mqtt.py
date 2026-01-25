@@ -7,7 +7,9 @@ from unittest import mock
 
 
 def load_transcode_module():
-    module_path = Path(__file__).resolve().parents[1] / "transcode" / "transcode_mqtt.py"
+    module_path = (
+        Path(__file__).resolve().parents[1] / "transcode" / "transcode_mqtt.py"
+    )
     spec = importlib.util.spec_from_file_location("transcode_mqtt", module_path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -35,13 +37,31 @@ class TestTranscodeHelpers(unittest.TestCase):
         detect_interlaced = self.transcode.detect_interlaced
         with mock.patch.object(self.transcode.subprocess, "check_output") as mocked:
             mocked.return_value = b"tt\n"
-            self.assertTrue(detect_interlaced(Path("dummy.mkv")))
+            with mock.patch.object(self.transcode, "run_idet") as run_idet:
+                self.assertTrue(detect_interlaced(Path("dummy.mkv")))
+                run_idet.assert_not_called()
+
+        with mock.patch.object(self.transcode.subprocess, "check_output") as mocked:
             mocked.return_value = b"progressive\n"
-            self.assertFalse(detect_interlaced(Path("dummy.mkv")))
+            with mock.patch.object(self.transcode, "run_idet") as run_idet:
+                run_idet.return_value = (5, 3, 1, 0)
+                self.assertTrue(detect_interlaced(Path("dummy.mkv")))
+
+            with mock.patch.object(self.transcode, "run_idet") as run_idet:
+                run_idet.return_value = (0, 0, 9, 1)
+                self.assertFalse(detect_interlaced(Path("dummy.mkv")))
+
+        with mock.patch.object(self.transcode.subprocess, "check_output") as mocked:
+            mocked.return_value = b"unknown\n"
+            with mock.patch.object(self.transcode, "run_idet") as run_idet:
+                run_idet.return_value = None
+                self.assertTrue(detect_interlaced(Path("dummy.mkv")))
 
         with mock.patch.object(self.transcode.subprocess, "check_output") as mocked:
             mocked.side_effect = OSError("boom")
-            self.assertIsNone(detect_interlaced(Path("dummy.mkv")))
+            with mock.patch.object(self.transcode, "run_idet") as run_idet:
+                run_idet.return_value = None
+                self.assertTrue(detect_interlaced(Path("dummy.mkv")))
 
     def test_probe_audio_streams(self):
         probe_audio_streams = self.transcode.probe_audio_streams
@@ -88,11 +108,12 @@ class TestTranscodeHelpers(unittest.TestCase):
             filter_streams(streams, {"eng"}), [{"index": 0, "language": "eng"}]
         )
         self.assertEqual(filter_streams(streams, set()), streams)
+
     def test_build_video_filter(self):
         build_video_filter = self.transcode.build_video_filter
         self.assertEqual(
             build_video_filter(True, True),
-            "bwdif,format=p010le,hwupload=extra_hw_frames=64",
+            "bwdif=mode=send_frame:parity=auto:deint=all,format=p010le,hwupload=extra_hw_frames=64",
         )
         self.assertEqual(
             build_video_filter(None, True),
@@ -102,7 +123,9 @@ class TestTranscodeHelpers(unittest.TestCase):
 
     def test_build_sw_filter(self):
         build_sw_filter = self.transcode.build_sw_filter
-        self.assertEqual(build_sw_filter(True), "bwdif")
+        self.assertEqual(
+            build_sw_filter(True), "bwdif=mode=send_frame:parity=auto:deint=all"
+        )
         self.assertIsNone(build_sw_filter(False))
         self.assertIsNone(build_sw_filter(None))
 
@@ -110,12 +133,9 @@ class TestTranscodeHelpers(unittest.TestCase):
         build_qsv_filter = self.transcode.build_qsv_filter
         self.assertEqual(
             build_qsv_filter(True, False),
-            "format=nv12,hwupload=extra_hw_frames=64,vpp_qsv=deinterlace=1",
+            "bwdif=mode=send_frame:parity=auto:deint=all,format=nv12,hwupload=extra_hw_frames=64",
         )
-        self.assertEqual(
-            build_qsv_filter(False, False),
-            "format=nv12,hwupload=extra_hw_frames=64,vpp_qsv=deinterlace=0",
-        )
+        self.assertIsNone(build_qsv_filter(False, False))
         self.assertEqual(build_qsv_filter(True, True), "vpp_qsv=deinterlace=1")
 
     def test_probe_video_codec(self):

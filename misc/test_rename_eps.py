@@ -33,8 +33,12 @@ class CollectRenamesTests(unittest.TestCase):
 
             self.assertTrue((base / "S01E00.mkv").exists())
             self.assertTrue((base / "S01E01.mkv").exists())
-            self.assertEqual((base / "S01E00.mkv").read_text(encoding="utf-8"), "episode one")
-            self.assertEqual((base / "S01E01.mkv").read_text(encoding="utf-8"), "episode two")
+            self.assertEqual(
+                (base / "S01E00.mkv").read_text(encoding="utf-8"), "episode one"
+            )
+            self.assertEqual(
+                (base / "S01E01.mkv").read_text(encoding="utf-8"), "episode two"
+            )
 
     def test_makemkv_pattern(self):
         with tempfile.TemporaryDirectory() as tmpdir:

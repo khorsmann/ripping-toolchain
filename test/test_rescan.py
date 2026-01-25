@@ -141,16 +141,24 @@ class TestRescanHelpers(unittest.TestCase):
                 with mock.patch.object(rescan, "build_mqtt_client") as build_client:
                     build_client.return_value = mock.Mock()
                     with mock.patch.object(rescan, "connect_mqtt"):
-                        with mock.patch.object(rescan, "mqtt_publish", side_effect=fake_publish):
-                            with mock.patch.object(rescan, "detect_source_type") as detect_type:
+                        with mock.patch.object(
+                            rescan, "mqtt_publish", side_effect=fake_publish
+                        ):
+                            with mock.patch.object(
+                                rescan, "detect_source_type"
+                            ) as detect_type:
                                 detect_type.return_value = "dvd"
-                                with mock.patch.object(rescan, "probe_height") as probe_height:
+                                with mock.patch.object(
+                                    rescan, "probe_height"
+                                ) as probe_height:
                                     probe_height.return_value = 576
                                     with mock.patch.object(
                                         rescan, "load_env_file"
                                     ) as load_env_file:
                                         load_env_file.return_value = None
-                                        with mock.patch.object(rescan.sys, "argv", ["rescan.py"]):
+                                        with mock.patch.object(
+                                            rescan.sys, "argv", ["rescan.py"]
+                                        ):
                                             rescan.main()
 
             self.assertEqual(len(payloads), 2)
