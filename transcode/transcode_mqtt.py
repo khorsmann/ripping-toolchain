@@ -644,9 +644,9 @@ def transcode_dir(client, job: dict):
                         "-init_hw_device",
                         "vaapi=va:/dev/dri/renderD128",
                         "-init_hw_device",
-                        "qsv=hw@va",
+                        "qsv=qsv@va",
                         "-filter_hw_device",
-                        "hw",
+                        "qsv",
                     ]
                 )
             cmd.extend(
