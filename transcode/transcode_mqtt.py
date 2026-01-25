@@ -775,6 +775,7 @@ def transcode_dir(client, job: dict):
                                 },
                             )
                         logging.info("running ffmpeg with encoder %s", encoder_label)
+                        logging.info("ffmpeg cmd: %s", " ".join(cmd))
                         try:
                             subprocess.run(cmd, check=True)
                             hw_failed = False
