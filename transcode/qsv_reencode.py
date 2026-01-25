@@ -56,12 +56,16 @@ def build_ffmpeg_cmd(ffmpeg_bin: str, infile: Path, outfile: Path, global_qualit
         "-y",
         *hw_init,
         "-i", str(infile),
+        "-map", "0",
+        "-map_metadata", "0",
+        "-map_chapters", "0",
         "-vf", vf,
         "-c:v", "hevc_qsv",
         "-preset", "medium",
         "-global_quality", str(global_quality),
         "-look_ahead", "1",
         "-c:a", "copy",
+        "-c:s", "copy",
         str(outfile),
     ]
 
@@ -187,4 +191,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
