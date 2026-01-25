@@ -38,6 +38,7 @@ transcode_mqtt (FFmpeg) <--- MQTT subscription
   ```
   - Liest `ripper.toml` (MQTT, DVD-Gerät, Storage, Heuristik) und prüft zuerst die MQTT-Konnektivität.
   - Optional kann die Quelle statt des Laufwerks als ISO (`--iso /pfad/disc.iso`) oder als VOB-Verzeichnis (`--vob-dir /pfad/VIDEO_TS`) angegeben werden.
+  - Optional kann `--interlaced` gesetzt werden, um Deinterlacing zu erzwingen (ohne Wert = `true`, mit Wert `true/false`); ohne Flag bleibt die Entscheidung bei der Auto-Erkennung im Transcode.
   - Die Heuristik erlaubt eine minimale (`min_episode_minutes`) und optional maximale (`max_episode_minutes`) Laufzeit, sodass Komplett-Disc-Titel (z. B. „title 0“ mit allen Episoden) ignoriert werden können; mit `--movie-name <Titel>` lässt sich der Film-Modus aktivieren, bei dem nur die Mindestlaufzeit greift.
   - Im Film-Modus entfallen `--series`, `--season`, `--disc` und `--episode-start`; die Datei wird als `<base_raw>/<source_type>/<movie_path>/<Titel>.mkv` (inkl. Info-Datei) abgelegt – `movie_path` stammt aus der Storage-Config (Default `Filme`), `<Titel>` ist der übergebene (normalisierte) `--movie-name`.
   - Ruft `makemkvcon` (`info` und `mkv`) auf, benennt die erzeugten Dateien um und legt Serien unter `<base_raw>/<source_type>/<series_path>/<Serie>/S<Staffel>/<Disc>` ab (Default `series_path = "Serien"`).

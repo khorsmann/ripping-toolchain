@@ -38,6 +38,7 @@ transcode_mqtt (FFmpeg) <--- MQTT subscription
    ```
   - Reads `ripper.toml` (MQTT, DVD drive, storage, heuristic) and checks MQTT connectivity first.
   - The heuristic allows a minimum (`min_episode_minutes`) and optional maximum (`max_episode_minutes`) runtime so "whole-disc titles" (e.g., "title 0" with all episodes) can be ignored; `--movie-name <title>` switches to movie mode where only the minimum length applies.
+  - Optionally set `--interlaced` to force deinterlacing (no value = `true`, or pass `true/false`); without the flag, the transcode step decides via auto-detection.
   - In movie mode, `--series`, `--season`, `--disc`, and `--episode-start` are omitted; the file is stored as `<base_raw>/<source_type>/<movie_path>/<Title>.mkv` (plus info file). `movie_path` comes from the storage config (default `Filme`); `<Title>` is the provided (normalized) `--movie-name`.
   - Invokes `makemkvcon` (`info` and `mkv`), renames the produced files, and stores series under `<base_raw>/<source_type>/<series_path>/<Series>/S<Season>/<Disc>` (default `series_path = "Serien"`).
   - Publishes `version = 1` in every `media/rip/done` payload; transcode-mqtt strictly rejects other versions.

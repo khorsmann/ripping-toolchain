@@ -172,6 +172,54 @@ class TestRipperVobDir(unittest.TestCase):
             movie_out = base / "raw" / "dvd" / "Filme" / "Movie.mkv"
             self.assertTrue(movie_out.exists())
 
+    def test_interlaced_flag_sets_payload(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir)
+            cfg = self.write_config(base)
+            vob_dir = base / "VIDEO_TS"
+            vob_dir.mkdir()
+            (vob_dir / "VTS_01_1.VOB").write_text("data")
+
+            info_text = 'TINFO:0,9,0,"0:42:00"\n'
+            payloads = []
+
+            def fake_run(cmd):
+                if cmd[3] == "info":
+                    return info_text
+                if cmd[3] == "mkv":
+                    out_dir = Path(cmd[-1])
+                    out_dir.mkdir(parents=True, exist_ok=True)
+                    (out_dir / "title_t00.mkv").write_bytes(b"fake")
+                return ""
+
+            def fake_publish(_config, payload):
+                payloads.append(payload)
+
+            argv = [
+                "ripper.py",
+                "--movie-name",
+                "Movie",
+                "--vob-dir",
+                str(vob_dir),
+                "--config",
+                str(cfg),
+                "--interlaced",
+            ]
+
+            with mock.patch.object(self.ripper.sys, "argv", argv):
+                with mock.patch.object(self.ripper, "run", side_effect=fake_run):
+                    with mock.patch.object(
+                        self.ripper, "mqtt_test_connection", return_value=False
+                    ):
+                        with mock.patch.object(
+                            self.ripper, "mqtt_publish", side_effect=fake_publish
+                        ):
+                            with mock.patch.object(self.ripper.time, "sleep"):
+                                self.ripper.main()
+
+            self.assertEqual(len(payloads), 1)
+            self.assertIs(payloads[0]["interlaced"], True)
+
 
 if __name__ == "__main__":
     unittest.main()

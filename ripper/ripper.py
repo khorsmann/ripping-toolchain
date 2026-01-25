@@ -284,6 +284,17 @@ def mqtt_publish(mqtt_config: dict, payload: dict):
         print(f"⚠ MQTT publish failed (ignored): {e}")
 
 
+def parse_optional_bool(value: str | None) -> bool | None:
+    if value is None:
+        return None
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"Invalid boolean value: {value}")
+
+
 # =====================
 # HAUPTLOGIK
 # =====================
@@ -325,6 +336,12 @@ def main():
         "--dvd",
         action="store_true",
         help="Bei Blu-ray-Laufwerk als DVD behandeln (überschreibt device type)",
+    )
+    ap.add_argument(
+        "--interlaced",
+        nargs="?",
+        const="true",
+        help="Deinterlacing erzwingen (optional, ohne Wert = true). Werte: true/false",
     )
 
     args = ap.parse_args()
@@ -530,13 +547,17 @@ def main():
 
     hostname = socket.gethostname().split(".")[0]
 
+    interlaced_override = None
+    if args.interlaced is not None:
+        interlaced_override = parse_optional_bool(args.interlaced)
+
     payload = {
         "version": MQTT_PAYLOAD_VERSION,
         "mode": "movie" if movie_mode else "series",
         "source_type": source_type,
         "path": str(outdir.resolve()),
         "files": [str(p.resolve()) for p in payload_files],
-        "interlaced": None,
+        "interlaced": interlaced_override,
     }
 
     if not iso_mode:
