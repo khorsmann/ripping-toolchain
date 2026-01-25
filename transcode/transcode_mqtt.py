@@ -113,6 +113,11 @@ def decide_idet(counts: tuple[int, int, int, int]) -> bool | None:
     return None
 
 
+def format_idet_counts(counts: tuple[int, int, int, int]) -> str:
+    tff, bff, progressive, undetermined = counts
+    return f"TFF={tff} BFF={bff} Progressive={progressive} Undetermined={undetermined}"
+
+
 def detect_interlaced(path: Path) -> bool | None:
     """
     Returns True if metadata or idet indicates interlaced, False if progressive,
@@ -141,7 +146,11 @@ def detect_interlaced(path: Path) -> bool | None:
 
     interlaced_meta = {"tt", "bb", "tb", "bt"}
     if field_order in interlaced_meta:
-        logging.info("detected interlaced video (%s) for %s", field_order, path)
+        logging.info(
+            "interlace decision: interlaced (reason=meta-data field_order=%s) for %s",
+            field_order,
+            path,
+        )
         return True
 
     frames = max(50, int(getenv("IDET_FRAMES", "500")))
@@ -149,17 +158,39 @@ def detect_interlaced(path: Path) -> bool | None:
     idet_decision = decide_idet(idet_counts) if idet_counts else None
 
     if idet_decision is True:
-        logging.info("idet indicates interlaced for %s", path)
+        logging.info(
+            "interlace decision: interlaced (reason=idet %s) for %s",
+            format_idet_counts(idet_counts),
+            path,
+        )
         return True
     if idet_decision is False:
-        logging.info("idet indicates progressive for %s", path)
+        logging.info(
+            "interlace decision: progressive (reason=idet %s) for %s",
+            format_idet_counts(idet_counts),
+            path,
+        )
         return False
 
     if field_order == "progressive":
+        logging.info(
+            "interlace decision: progressive (reason=meta-data field_order=progressive) for %s",
+            path,
+        )
         return False
     if field_order in {"unknown", ""}:
+        logging.info(
+            "interlace decision: interlaced (reason=meta-data field_order=%s) for %s",
+            field_order or "unknown",
+            path,
+        )
         return True
     if field_order:
+        logging.info(
+            "interlace decision: progressive (reason=meta-data field_order=%s) for %s",
+            field_order,
+            path,
+        )
         return False
     return None
 
