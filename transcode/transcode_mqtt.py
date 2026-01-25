@@ -331,11 +331,10 @@ def build_sw_filter(interlaced: bool | None) -> str | None:
 
 
 def build_qsv_filter(interlaced: bool | None, qsv_direct: bool) -> str | None:
-    if interlaced is not True:
-        return None
+    deint = "1" if interlaced is True else "0"
     if qsv_direct:
-        return f"vpp_qsv=deinterlace=1"
-    return f"{BWDIF_FILTER},format=nv12,hwupload=extra_hw_frames=64"
+        return f"vpp_qsv=deinterlace={deint}"
+    return f"format=nv12,hwupload=extra_hw_frames=64,vpp_qsv=deinterlace={deint}"
 
 
 # --------------------
