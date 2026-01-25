@@ -2,6 +2,8 @@
 set -euo pipefail
 
 SERVICE=transcode-mqtt.service
+LOGROTATE_SERVICE=transcode-mqtt-logrotate.service
+LOGROTATE_TIMER=transcode-mqtt-logrotate.timer
 LOCK_FILE=/var/lock/vaapi.lock
 SVC_BIN=/usr/local/bin/transcode_mqtt.py
 
@@ -37,11 +39,17 @@ fi
 
 echo "Installing files..."
 install -o root -g root -m 0755 transcode-mqtt.service /etc/systemd/system/transcode-mqtt.service
+install -o root -g root -m 0644 transcode-mqtt-logrotate.service /etc/systemd/system/transcode-mqtt-logrotate.service
+install -o root -g root -m 0644 transcode-mqtt-logrotate.timer /etc/systemd/system/transcode-mqtt-logrotate.timer
 install -o root -g root -m 0755 transcode_mqtt.py "$SVC_BIN"
 install -o root -g root -m 0644 etc/transcode-mqtt.env /etc/transcode-mqtt.env
+install -o root -g root -m 0644 etc/transcode-mqtt.logrotate /etc/logrotate.d/transcode-mqtt
 
 echo "Reloading systemd daemon..."
 systemctl daemon-reload
+
+echo "Enabling log rotation timer..."
+systemctl enable --now "$LOGROTATE_TIMER"
 
 echo "Starting $SERVICE..."
 systemctl start "$SERVICE"

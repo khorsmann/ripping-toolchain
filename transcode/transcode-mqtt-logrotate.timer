@@ -1,0 +1,10 @@
+# /etc/systemd/system/transcode-mqtt-logrotate.timer
+[Unit]
+Description=Daily rotation of transcode-mqtt log
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+
+[Install]
+WantedBy=timers.target

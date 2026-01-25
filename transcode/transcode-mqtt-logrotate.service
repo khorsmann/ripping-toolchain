@@ -1,0 +1,7 @@
+# /etc/systemd/system/transcode-mqtt-logrotate.service
+[Unit]
+Description=Rotate transcode-mqtt log via logrotate
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/logrotate /etc/logrotate.d/transcode-mqtt
