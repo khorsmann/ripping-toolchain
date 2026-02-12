@@ -159,6 +159,12 @@ def filter_ready_mkvs(
     return ready, dropped, sample_height
 
 
+def chunk_list(items: List[Path], size: int) -> List[List[Path]]:
+    if size <= 0:
+        return [items]
+    return [items[i : i + size] for i in range(0, len(items), size)]
+
+
 def build_mqtt_client() -> mqtt.Client:
     kwargs = {}
     callback_version = getattr(mqtt, "CallbackAPIVersion", None)
@@ -422,15 +428,16 @@ def main():
             source_type = detect_source_type(
                 src_dir, source_root, source_type_default, ready_mkvs[0], sample_height
             )
-            payload = {
-                "version": MQTT_PAYLOAD_VERSION,
-                "mode": "series",
-                "source_type": source_type,
-                "path": str(src_dir.resolve()),
-                "files": [str(p.resolve()) for p in ready_mkvs],
-                "interlaced": None,
-            }
-            mqtt_publish(client, MQTT_TOPIC, payload, args.dry_run)
+            for batch in chunk_list(ready_mkvs, 5):
+                payload = {
+                    "version": MQTT_PAYLOAD_VERSION,
+                    "mode": "series",
+                    "source_type": source_type,
+                    "path": str(src_dir.resolve()),
+                    "files": [str(p.resolve()) for p in batch],
+                    "interlaced": None,
+                }
+                mqtt_publish(client, MQTT_TOPIC, payload, args.dry_run)
 
         for parent, mkvs in sorted(result["movie_dirs"].items()):
             ready_mkvs, dropped_mkvs, sample_height = filter_ready_mkvs(
@@ -452,15 +459,16 @@ def main():
             source_type = detect_source_type(
                 parent, source_root, source_type_default, ready_mkvs[0], sample_height
             )
-            payload = {
-                "version": MQTT_PAYLOAD_VERSION,
-                "mode": "movie",
-                "source_type": source_type,
-                "path": str(parent.resolve()),
-                "files": [str(p.resolve()) for p in ready_mkvs],
-                "interlaced": None,
-            }
-            mqtt_publish(client, MQTT_TOPIC, payload, args.dry_run)
+            for batch in chunk_list(ready_mkvs, 5):
+                payload = {
+                    "version": MQTT_PAYLOAD_VERSION,
+                    "mode": "movie",
+                    "source_type": source_type,
+                    "path": str(parent.resolve()),
+                    "files": [str(p.resolve()) for p in batch],
+                    "interlaced": None,
+                }
+                mqtt_publish(client, MQTT_TOPIC, payload, args.dry_run)
 
     client.disconnect()
     logging.info("done")
