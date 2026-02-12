@@ -419,6 +419,9 @@ SERIES_SRC_BASE = (SRC_BASE / SERIES_SUBPATH).resolve()
 SERIES_DST_BASE = (
     Path(getenv("SERIES_DST_BASE", "/media/Serien")).expanduser().resolve()
 )
+MOVIE_SUBPATH = Path(getenv("MOVIE_SUBPATH", "Filme"))
+if MOVIE_SUBPATH.is_absolute():
+    raise RuntimeError("MOVIE_SUBPATH must be relative")
 MOVIE_DST_BASE = Path(getenv("MOVIE_DST_BASE", "/media/Filme")).expanduser().resolve()
 
 
@@ -485,6 +488,24 @@ def series_src_base_for_source(source_type: str) -> Path:
         if candidate_root.exists():
             return (candidate_root / SERIES_SUBPATH).resolve()
     return SERIES_SRC_BASE
+
+
+def infer_mode_from_path(path: Path) -> str | None:
+    parts = {part.lower() for part in path.parts}
+    if MOVIE_SUBPATH.name.lower() in parts:
+        return "movie"
+    if SERIES_SUBPATH.name.lower() in parts:
+        return "series"
+    return None
+
+
+def infer_source_type_from_path(path: Path) -> str | None:
+    parts = {part.lower() for part in path.parts}
+    if "bluray" in parts:
+        return "bluray"
+    if "dvd" in parts:
+        return "dvd"
+    return None
 
 
 # --------------------
@@ -980,19 +1001,25 @@ def on_message(client, userdata, msg):
 
         files_raw = payload.get("files")
         files = []
-        if not isinstance(files_raw, list) or not files_raw:
-            logging.warning("payload requires non-empty 'files' list, skipping")
+        if isinstance(files_raw, list) and files_raw:
+            files = [str(Path(file_path).expanduser().resolve()) for file_path in files_raw]
+        elif path is None:
+            logging.warning("payload requires 'files' list or existing 'path', skipping")
             return
-        files = [str(Path(file_path).expanduser().resolve()) for file_path in files_raw]
 
-        mode = payload.get("mode", "series")
+        mode = payload.get("mode")
         if mode not in {"movie", "series"}:
-            logging.warning("payload has invalid mode '%s', skipping", mode)
+            mode = infer_mode_from_path(path) if path else None
+        if mode not in {"movie", "series"}:
+            logging.warning("payload has invalid or missing mode '%s', skipping", mode)
             return
+
         source_type = payload.get("source_type")
         if source_type not in {"dvd", "bluray"}:
+            source_type = infer_source_type_from_path(path) if path else None
+        if source_type not in {"dvd", "bluray"}:
             logging.warning(
-                "payload has invalid source_type '%s', skipping", source_type
+                "payload has invalid or missing source_type '%s', skipping", source_type
             )
             return
         interlaced = payload.get("interlaced")
@@ -1036,10 +1063,11 @@ def on_message(client, userdata, msg):
 def main():
     logging.info("transcode-mqtt starting up")
     logging.info(
-        "config: SRC_BASE=%s (series subpath=%s), SERIES_DST_BASE=%s, MOVIE_DST_BASE=%s, "
-        "MQTT_TOPIC=%s",
+        "config: SRC_BASE=%s (series subpath=%s, movie subpath=%s), SERIES_DST_BASE=%s, "
+        "MOVIE_DST_BASE=%s, MQTT_TOPIC=%s",
         SRC_BASE,
         SERIES_SUBPATH,
+        MOVIE_SUBPATH,
         SERIES_DST_BASE,
         MOVIE_DST_BASE,
         MQTT_TOPIC,
