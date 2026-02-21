@@ -191,11 +191,13 @@ def connect_mqtt(client: mqtt.Client):
             time.sleep(5)
 
 
-def mqtt_publish(client: mqtt.Client, topic: str, payload: dict, dry_run: bool):
+def mqtt_publish(client: mqtt.Client | None, topic: str, payload: dict, dry_run: bool):
     msg = json.dumps(payload)
     if dry_run:
         logging.info("[dry-run] would publish to %s: %s", topic, msg)
         return
+    if client is None:
+        raise RuntimeError("mqtt client is required when dry-run is disabled")
     client.publish(topic, msg, qos=1, retain=False)
     logging.info("published job to %s: %s", topic, msg)
 
@@ -278,11 +280,24 @@ def collect_missing_movie_dirs(
             logging.info("skip temp mkv from scan: %s", mkv)
             skipped.append(mkv)
             continue
-        rel = mkv.relative_to(movie_src_base)
-        dest = movie_dst_base / rel
-        if dest.exists():
+
+        # movie jobs are published per parent dir. transcode_mqtt resolves the
+        # output path relative to that parent, so nested source dirs are
+        # flattened to MOVIE_DST_BASE/<filename>.
+        job_root = mkv.parent
+        try:
+            rel_worker = mkv.relative_to(job_root)
+        except ValueError:
+            rel_worker = Path(mkv.name)
+        expected_dest = movie_dst_base / rel_worker
+
+        # Keep compatibility with already-existing outputs that preserve source
+        # subfolders from older/manual flows.
+        legacy_dest = movie_dst_base / mkv.relative_to(movie_src_base)
+
+        if expected_dest.exists() or legacy_dest.exists():
             continue
-        missing.setdefault(mkv.parent, []).append(mkv)
+        missing.setdefault(job_root, []).append(mkv)
 
     return missing, skipped
 
@@ -444,8 +459,12 @@ def main():
             ", ".join(str(p) for p in sorted(series_skipped_all + movie_skipped_all)),
         )
 
-    client = build_mqtt_client()
-    connect_mqtt(client)
+    client: mqtt.Client | None = None
+    if args.dry_run:
+        logging.info("dry-run enabled: skipping MQTT connection")
+    else:
+        client = build_mqtt_client()
+        connect_mqtt(client)
 
     for result in scan_results:
         source_root = result["source_root"]
@@ -514,7 +533,8 @@ def main():
                 mqtt_publish(client, MQTT_TOPIC, payload, args.dry_run)
                 sleep_between_batches(batch_sleep, args.dry_run)
 
-    client.disconnect()
+    if client is not None:
+        client.disconnect()
     logging.info("done")
 
 
