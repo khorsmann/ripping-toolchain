@@ -6,6 +6,7 @@ import logging
 import os
 import queue
 import re
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -405,6 +406,14 @@ if AUDIO_MODE not in {"auto", "encode", "copy"}:
     raise RuntimeError("AUDIO_MODE must be 'auto', 'encode' or 'copy'")
 AUDIO_LANGS = parse_langs(getenv("AUDIO_LANGS"), "eng,ger,deu")
 SUB_LANGS = parse_langs(getenv("SUB_LANGS"), "eng,ger,deu")
+JOB_QUEUE_BACKEND = getenv("JOB_QUEUE_BACKEND", "memory").strip().lower()
+JOB_QUEUE_SQLITE_PATH = Path(
+    getenv("JOB_QUEUE_SQLITE_PATH", "/tmp/transcode-mqtt-jobs.sqlite3")
+).expanduser()
+JOB_QUEUE_POLL_INTERVAL = max(0.1, float(getenv("JOB_QUEUE_POLL_INTERVAL", "1.0")))
+JOB_QUEUE_CLAIM_TTL = max(5, int(getenv("JOB_QUEUE_CLAIM_TTL", "300")))
+if JOB_QUEUE_BACKEND not in {"memory", "sqlite"}:
+    raise RuntimeError("JOB_QUEUE_BACKEND must be 'memory' or 'sqlite'")
 
 
 # --------------------
@@ -506,6 +515,109 @@ def infer_source_type_from_path(path: Path) -> str | None:
     if "dvd" in parts:
         return "dvd"
     return None
+
+
+class SQLiteJobQueue:
+    def __init__(
+        self, db_path: Path, poll_interval: float = 1.0, claim_ttl_seconds: int = 300
+    ):
+        self.db_path = db_path.resolve()
+        self.poll_interval = poll_interval
+        self.claim_ttl_seconds = claim_ttl_seconds
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self.conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
+        self.conn.execute("PRAGMA journal_mode=WAL")
+        self.conn.execute("PRAGMA synchronous=NORMAL")
+        self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS jobs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                payload TEXT NOT NULL,
+                created_ts INTEGER NOT NULL,
+                claimed_ts INTEGER
+            )
+            """
+        )
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_jobs_claimed_id ON jobs (claimed_ts, id)"
+        )
+        self.conn.commit()
+        self.lock = threading.Lock()
+        self.not_empty = threading.Condition(self.lock)
+
+    def put(self, job: dict):
+        payload = json.dumps(job, separators=(",", ":"))
+        now = int(time.time())
+        with self.not_empty:
+            self.conn.execute(
+                "INSERT INTO jobs (payload, created_ts, claimed_ts) VALUES (?, ?, NULL)",
+                (payload, now),
+            )
+            self.conn.commit()
+            self.not_empty.notify()
+
+    def get(self):
+        while True:
+            with self.not_empty:
+                claimed = self._claim_next_job()
+                if claimed is not None:
+                    return claimed
+                self.not_empty.wait(timeout=self.poll_interval)
+
+    def _claim_next_job(self):
+        reclaim_before = int(time.time()) - self.claim_ttl_seconds
+        row = self.conn.execute(
+            """
+            SELECT id, payload
+            FROM jobs
+            WHERE claimed_ts IS NULL OR claimed_ts < ?
+            ORDER BY id ASC
+            LIMIT 1
+            """,
+            (reclaim_before,),
+        ).fetchone()
+        if row is None:
+            return None
+
+        job_id = int(row[0])
+        claimed_ts = int(time.time())
+        cur = self.conn.execute(
+            """
+            UPDATE jobs
+            SET claimed_ts = ?
+            WHERE id = ? AND (claimed_ts IS NULL OR claimed_ts < ?)
+            """,
+            (claimed_ts, job_id, reclaim_before),
+        )
+        if cur.rowcount != 1:
+            self.conn.commit()
+            return None
+        self.conn.commit()
+
+        try:
+            payload = json.loads(row[1])
+        except Exception:
+            logging.exception("invalid queued payload in SQLite queue, dropping id=%s", job_id)
+            self.conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+            self.conn.commit()
+            return None
+
+        if isinstance(payload, dict):
+            payload["_queue_id"] = job_id
+            return payload
+        logging.warning("queued payload is not an object, dropping id=%s", job_id)
+        self.conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+        self.conn.commit()
+        return None
+
+    def task_done(self, job: dict):
+        job_id = job.get("_queue_id") if isinstance(job, dict) else None
+        if job_id is None:
+            logging.warning("SQLite queue task_done without _queue_id")
+            return
+        with self.lock:
+            self.conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+            self.conn.commit()
 
 
 # --------------------
@@ -948,7 +1060,7 @@ def transcode_dir(client, job: dict):
 # --------------------
 # Worker Thread
 # --------------------
-def worker_loop(client: mqtt.Client, job_queue: queue.Queue):
+def worker_loop(client: mqtt.Client, job_queue):
     while True:
         job = job_queue.get()
         try:
@@ -959,7 +1071,10 @@ def worker_loop(client: mqtt.Client, job_queue: queue.Queue):
         except Exception:
             logging.exception(f"transcode error while handling {job.get('path')}")
         finally:
-            job_queue.task_done()
+            if isinstance(job_queue, SQLiteJobQueue):
+                job_queue.task_done(job)
+            else:
+                job_queue.task_done()
 
 
 # --------------------
@@ -1064,17 +1179,32 @@ def main():
     logging.info("transcode-mqtt starting up")
     logging.info(
         "config: SRC_BASE=%s (series subpath=%s, movie subpath=%s), SERIES_DST_BASE=%s, "
-        "MOVIE_DST_BASE=%s, MQTT_TOPIC=%s",
+        "MOVIE_DST_BASE=%s, MQTT_TOPIC=%s, JOB_QUEUE_BACKEND=%s",
         SRC_BASE,
         SERIES_SUBPATH,
         MOVIE_SUBPATH,
         SERIES_DST_BASE,
         MOVIE_DST_BASE,
         MQTT_TOPIC,
+        JOB_QUEUE_BACKEND,
     )
 
     client = build_mqtt_client()
-    job_queue = queue.Queue()
+    if JOB_QUEUE_BACKEND == "sqlite":
+        job_queue = SQLiteJobQueue(
+            JOB_QUEUE_SQLITE_PATH,
+            poll_interval=JOB_QUEUE_POLL_INTERVAL,
+            claim_ttl_seconds=JOB_QUEUE_CLAIM_TTL,
+        )
+        logging.info(
+            "using SQLite queue at %s (poll_interval=%ss, claim_ttl=%ss)",
+            JOB_QUEUE_SQLITE_PATH,
+            JOB_QUEUE_POLL_INTERVAL,
+            JOB_QUEUE_CLAIM_TTL,
+        )
+    else:
+        job_queue = queue.Queue()
+        logging.info("using in-memory queue backend")
     client.user_data_set(job_queue)
     client.on_message = on_message
 

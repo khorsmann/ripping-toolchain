@@ -200,6 +200,12 @@ def mqtt_publish(client: mqtt.Client, topic: str, payload: dict, dry_run: bool):
     logging.info("published job to %s: %s", topic, msg)
 
 
+def sleep_between_batches(delay_seconds: float, dry_run: bool):
+    if delay_seconds <= 0 or dry_run:
+        return
+    time.sleep(delay_seconds)
+
+
 def load_env_file(path: Path):
     """
     Lädt KEY=VALUE Paare aus einer Datei und setzt sie, falls sie noch nicht
@@ -283,7 +289,15 @@ def collect_missing_movie_dirs(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Finde fehlende Transcodes und publiziere MQTT-Jobs"
+        description="Finde fehlende Transcodes und publiziere MQTT-Jobs",
+        epilog=(
+            "Beispiele:\n"
+            "  %(prog)s --dry-run\n"
+            "  %(prog)s --batch-size 3 --batch-sleep 0.25\n"
+            "ENV-Fallbacks:\n"
+            "  RESCAN_BATCH_SIZE, RESCAN_BATCH_SLEEP"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
         "--dry-run",
@@ -299,6 +313,18 @@ def main():
         "--allow-ffprobe-failures",
         action="store_true",
         help="FFprobe-Fehler ignorieren und Dateien trotzdem publishen",
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=None,
+        help="Anzahl Dateien pro MQTT-Job (Default: RESCAN_BATCH_SIZE oder 5)",
+    )
+    parser.add_argument(
+        "--batch-sleep",
+        type=float,
+        default=None,
+        help="Pause in Sekunden zwischen MQTT-Jobs (Default: RESCAN_BATCH_SLEEP oder 0)",
     )
     args = parser.parse_args()
 
@@ -319,6 +345,18 @@ def main():
     MQTT_PASSWORD = getenv("MQTT_PASSWORD", required=True)
     MQTT_TOPIC = getenv("MQTT_TOPIC", "media/rip/done")
     MQTT_SSL = getenv_bool("MQTT_SSL", "false")
+    batch_size = (
+        args.batch_size if args.batch_size is not None else int(getenv("RESCAN_BATCH_SIZE", "5"))
+    )
+    batch_sleep = (
+        args.batch_sleep
+        if args.batch_sleep is not None
+        else float(getenv("RESCAN_BATCH_SLEEP", "0"))
+    )
+    if batch_size <= 0:
+        raise RuntimeError("batch-size must be > 0")
+    if batch_sleep < 0:
+        raise RuntimeError("batch-sleep must be >= 0")
 
     src_base = Path(getenv("SRC_BASE", required=True)).expanduser().resolve()
     source_type_default = getenv("SOURCE_TYPE", "dvd").strip().lower()
@@ -343,7 +381,7 @@ def main():
     roots_label = ", ".join(f"{stype}={path}" for stype, path in source_roots)
     logging.info(
         "config: MQTT_TOPIC=%s, SRC_BASE=%s (roots=%s, series subpath=%s, movie subpath=%s), "
-        "SERIES_DST_BASE=%s, MOVIE_DST_BASE=%s",
+        "SERIES_DST_BASE=%s, MOVIE_DST_BASE=%s, BATCH_SIZE=%d, BATCH_SLEEP=%ss",
         MQTT_TOPIC,
         src_base,
         roots_label,
@@ -351,6 +389,8 @@ def main():
         movie_subpath,
         series_dst_base,
         movie_dst_base,
+        batch_size,
+        batch_sleep,
     )
 
     scan_results = []
@@ -428,7 +468,7 @@ def main():
             source_type = detect_source_type(
                 src_dir, source_root, source_type_default, ready_mkvs[0], sample_height
             )
-            for batch in chunk_list(ready_mkvs, 5):
+            for batch in chunk_list(ready_mkvs, batch_size):
                 payload = {
                     "version": MQTT_PAYLOAD_VERSION,
                     "mode": "series",
@@ -438,6 +478,7 @@ def main():
                     "interlaced": None,
                 }
                 mqtt_publish(client, MQTT_TOPIC, payload, args.dry_run)
+                sleep_between_batches(batch_sleep, args.dry_run)
 
         for parent, mkvs in sorted(result["movie_dirs"].items()):
             ready_mkvs, dropped_mkvs, sample_height = filter_ready_mkvs(
@@ -459,7 +500,7 @@ def main():
             source_type = detect_source_type(
                 parent, source_root, source_type_default, ready_mkvs[0], sample_height
             )
-            for batch in chunk_list(ready_mkvs, 5):
+            for batch in chunk_list(ready_mkvs, batch_size):
                 payload = {
                     "version": MQTT_PAYLOAD_VERSION,
                     "mode": "movie",
@@ -469,6 +510,7 @@ def main():
                     "interlaced": None,
                 }
                 mqtt_publish(client, MQTT_TOPIC, payload, args.dry_run)
+                sleep_between_batches(batch_sleep, args.dry_run)
 
     client.disconnect()
     logging.info("done")
