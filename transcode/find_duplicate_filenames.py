@@ -34,7 +34,9 @@ def find_duplicate_filenames(
             key = Path(filename).stem if use_stem else filename
             files_by_name[key].append(root_path / filename)
 
-    return {name: paths for name, paths in files_by_name.items() if len(paths) > 1}
+    return {
+        name: paths for name, paths in files_by_name.items() if len(paths) > 1
+    }
 
 
 def main() -> None:
@@ -50,7 +52,10 @@ def main() -> None:
     parser.add_argument(
         "--glob",
         default="*",
-        help="Only include files matching this glob pattern (default: '*'). Example: '*.mkv'",
+        help=(
+            "Only include files matching this glob pattern "
+            "(default: '*'). Example: '*.mkv'"
+        ),
     )
     parser.add_argument(
         "--case-sensitive",
@@ -60,7 +65,10 @@ def main() -> None:
     parser.add_argument(
         "--stem",
         action="store_true",
-        help="Compare by file name without extension (e.g. a.mkv and a.mp4 count as duplicate).",
+        help=(
+            "Compare by file name without extension "
+            "(e.g. a.mkv and a.mp4 count as duplicate)."
+        ),
     )
     args = parser.parse_args()
 
