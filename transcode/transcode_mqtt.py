@@ -1002,9 +1002,13 @@ def on_message(client, userdata, msg):
         files_raw = payload.get("files")
         files = []
         if isinstance(files_raw, list) and files_raw:
-            files = [str(Path(file_path).expanduser().resolve()) for file_path in files_raw]
+            files = [
+                str(Path(file_path).expanduser().resolve()) for file_path in files_raw
+            ]
         elif path is None:
-            logging.warning("payload requires 'files' list or existing 'path', skipping")
+            logging.warning(
+                "payload requires 'files' list or existing 'path', skipping"
+            )
             return
 
         mode = payload.get("mode")
