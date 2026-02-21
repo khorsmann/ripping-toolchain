@@ -20,9 +20,9 @@ transcode_mqtt (FFmpeg) <--- MQTT subscription
 ```
 
 - **ripper/ripper.py** analysiert eine eingelegte DVD via MakeMKV CLI, wählt anhand einer Kapitel-Dauer-Heuristik geeignete Episoden aus, rippt sie nach `base_raw/<source_type>` und veröffentlicht anschließend ein MQTT-Event (`media/rip/done`), das Pfad, Serie, Staffel, Disc usw. enthält.
-- **transcode/transcode_mqtt.py** läuft als Dienst, abonniert das MQTT-Topic `media/rip/done`, queued jedes empfangene Path-Event und transkodiert alle darin enthaltenen `.mkv` Dateien nach `SERIES_DST_BASE` (standardmäßig `/media/Serien`) bzw. `MOVIE_DST_BASE` via `ffmpeg` + VAAPI-Hardwarebeschleunigung. Standardmäßig werden bei Blu-rays Audio-Spuren nach EAC3 (Mehrkanal) bzw. AAC (Stereo) encodiert, DVDs bleiben im Original (`AUDIO_MODE=auto`); Sprache lässt sich über `AUDIO_LANGS`/`SUB_LANGS` filtern. Fortschritt und Fehler werden auf `media/transcode/start`, `media/transcode/done` bzw. `media/transcode/error` zurückgemeldet.
+- **transcode/transcode_mqtt.py** läuft als Dienst, abonniert das MQTT-Topic `media/rip/done`, queued jedes empfangene Path-Event und transkodiert alle darin enthaltenen `.mkv` Dateien nach `SERIES_DST_BASE` (standardmäßig `/media/Serien`) bzw. `MOVIE_DST_BASE` via `ffmpeg` + VAAPI-Hardwarebeschleunigung. Standardmäßig werden bei Blu-rays Audio-Spuren nach EAC3 (Mehrkanal) bzw. AAC (Stereo) encodiert, DVDs bleiben im Original (`AUDIO_MODE=auto`); Sprache lässt sich über `AUDIO_LANGS`/`SUB_LANGS` filtern. Fortschritt und Fehler werden auf `media/transcode/start`, `media/transcode/done` bzw. `media/transcode/error` zurückgemeldet. Für größere Last kann die interne Queue persistent per SQLite betrieben werden (`JOB_QUEUE_BACKEND=sqlite`).
 - Optionale Integrationen (z. B. Home Assistant) können sowohl auf rip- als auch transcode-Topics reagieren, siehe `misc/homeassistant/`.
-- **transcode/rescan.py** prüft den Roh-Baum (`SRC_BASE`) gegen die Ziele (`SERIES_DST_BASE`/`MOVIE_DST_BASE`) und sendet MQTT-Jobs für alle Quell-Dirs, in denen transkodierte MKVs fehlen; `--dry-run` zeigt nur an, was gesendet würde. Lädt optional das gleiche Env-File wie der Dienst (`--env-file`, Default `/etc/transcode-mqtt.env`).
+- **transcode/rescan.py** prüft den Roh-Baum (`SRC_BASE`) gegen die Ziele (`SERIES_DST_BASE`/`MOVIE_DST_BASE`) und sendet MQTT-Jobs für alle Quell-Dirs, in denen transkodierte MKVs fehlen; `--dry-run` zeigt nur an, was gesendet würde. Lädt optional das gleiche Env-File wie der Dienst (`--env-file`, Default `/etc/transcode-mqtt.env`) und kann Publish-Batches drosseln (`--batch-size`, `--batch-sleep` bzw. `RESCAN_BATCH_SIZE`, `RESCAN_BATCH_SLEEP`).
 
 
 ## Komponenten & Zusammenspiel
@@ -47,7 +47,7 @@ transcode_mqtt (FFmpeg) <--- MQTT subscription
 
 2. **Transcode-Dienst**  
    - Läuft typischerweise via Systemd (`transcode/transcode-mqtt.service`) und lädt seine Umgebung aus `/etc/transcode-mqtt.env` (nutzt `/usr/lib/jellyfin-ffmpeg/ffmpeg`, falls vorhanden; sonst System-FFmpeg, überschreibbar via `FFMPEG_BIN`/`FFPROBE_BIN`).
-   - Sobald ein `media/rip/done`-Event eingeht, landet der Pfad in einer internen Queue. Ein Worker-Thread verarbeitet das Verzeichnis sequenziell:
+   - Sobald ein `media/rip/done`-Event eingeht, landet der Pfad in einer internen Queue. Standard ist RAM-Queue (`JOB_QUEUE_BACKEND=memory`), optional persistente SQLite-Queue (`JOB_QUEUE_BACKEND=sqlite`, `JOB_QUEUE_SQLITE_PATH`), inkl. Reclaim hängender Jobs (`JOB_QUEUE_CLAIM_TTL`). Ein Worker-Thread verarbeitet das Verzeichnis sequenziell:
      - Vor jeder Datei wird `media/transcode/start` inkl. Eingangs- und Ausgabepfad publiziert.
      - Während `ffmpeg` läuft, hält ein Lock unter `/var/lock/vaapi.lock` andere Instanzen von der GPU fern.
      - Hardware-Retries sind über `MAX_HW_RETRIES` konfigurierbar (Default 2 nach dem initialen Versuch).
@@ -82,6 +82,15 @@ transcode_mqtt (FFmpeg) <--- MQTT subscription
 
 - Beide Komponenten gehen davon aus, dass `series_path` (Ripper) und `SERIES_SUBPATH` (Transcode) identisch sind. Bei `SRC_BASE` ohne Unterordner werden Serien unter `SRC_BASE/<SERIES_SUBPATH>` erwartet; bei `SRC_BASE` mit `dvd/` bzw. `bluray/` darunter liegt die Struktur unter `SRC_BASE/<source_type>/<SERIES_SUBPATH>`. Filme landen gesammelt unter `MOVIE_DST_BASE`.
 - MQTT-Topics lassen sich über Environment-Variablen anpassen; Standard ist `media/rip/done` für Eingänge und `media/transcode/*` für Statusmeldungen.
+- `rescan.py`-Hilfe anzeigen: `./transcode/rescan.py --help`
+- Für große Rescans: z. B. `RESCAN_BATCH_SIZE=3` und `RESCAN_BATCH_SLEEP=0.25`, damit Broker/Consumer nicht mit zu vielen Nachrichten auf einmal geflutet werden.
+- Für ausfallsichere Queue im Transcode-Dienst: `JOB_QUEUE_BACKEND=sqlite` und einen persistenten Pfad bei `JOB_QUEUE_SQLITE_PATH` setzen.
 - Zum Debuggen von QSV gibt es `misc/qsv-test.sh` (nutzt Jellyfin-FFmpeg, falls vorhanden; sonst System-FFmpeg) und führt kurze Hardware-Encode-Tests für progressiv und Deinterlace aus.
 - Zum Korrigieren fehlerhafter Seitenverhältnisse gibt es `misc/fix-aspect.py` (setzt DAR via `mkvpropedit` für explizit angegebene Dateien/Verzeichnisse).
 - Der komplette Workflow dient ausschließlich dazu, privat erworbene Medien für den Eigenbedarf zu digitalisieren. Rechte Dritter (DRM, Urheberrecht) sind zu beachten; eine Weitergabe oder öffentliche Bereitstellung gerippter/transkodierter Dateien ist nicht vorgesehen.
+
+
+## Tests
+
+- Bestehende Misc-Tests: `python -m unittest discover -s misc -p 'test_*.py'`
+- Transcode/Rescan-Tests: `python -m unittest discover -s transcode/tests -p 'test_*.py'`
