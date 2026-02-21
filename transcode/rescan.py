@@ -346,7 +346,9 @@ def main():
     MQTT_TOPIC = getenv("MQTT_TOPIC", "media/rip/done")
     MQTT_SSL = getenv_bool("MQTT_SSL", "false")
     batch_size = (
-        args.batch_size if args.batch_size is not None else int(getenv("RESCAN_BATCH_SIZE", "5"))
+        args.batch_size
+        if args.batch_size is not None
+        else int(getenv("RESCAN_BATCH_SIZE", "5"))
     )
     batch_sleep = (
         args.batch_sleep

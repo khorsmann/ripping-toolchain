@@ -528,16 +528,14 @@ class SQLiteJobQueue:
         self.conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA synchronous=NORMAL")
-        self.conn.execute(
-            """
+        self.conn.execute("""
             CREATE TABLE IF NOT EXISTS jobs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 payload TEXT NOT NULL,
                 created_ts INTEGER NOT NULL,
                 claimed_ts INTEGER
             )
-            """
-        )
+            """)
         self.conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_jobs_claimed_id ON jobs (claimed_ts, id)"
         )
@@ -597,7 +595,9 @@ class SQLiteJobQueue:
         try:
             payload = json.loads(row[1])
         except Exception:
-            logging.exception("invalid queued payload in SQLite queue, dropping id=%s", job_id)
+            logging.exception(
+                "invalid queued payload in SQLite queue, dropping id=%s", job_id
+            )
             self.conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
             self.conn.commit()
             return None
@@ -1117,9 +1117,13 @@ def on_message(client, userdata, msg):
         files_raw = payload.get("files")
         files = []
         if isinstance(files_raw, list) and files_raw:
-            files = [str(Path(file_path).expanduser().resolve()) for file_path in files_raw]
+            files = [
+                str(Path(file_path).expanduser().resolve()) for file_path in files_raw
+            ]
         elif path is None:
-            logging.warning("payload requires 'files' list or existing 'path', skipping")
+            logging.warning(
+                "payload requires 'files' list or existing 'path', skipping"
+            )
             return
 
         mode = payload.get("mode")
