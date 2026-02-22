@@ -20,6 +20,7 @@ import re
 import subprocess
 import sys
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Tuple
 
@@ -235,8 +236,14 @@ def load_env_file(path: Path):
             os.environ[key] = value.strip()
 
 
+def is_recent_enough(path: Path, cutoff_ts: float | None) -> bool:
+    if cutoff_ts is None:
+        return True
+    return path.stat().st_mtime >= cutoff_ts
+
+
 def collect_missing_series_dirs(
-    src_base: Path, dst_base: Path
+    src_base: Path, dst_base: Path, cutoff_ts: float | None = None
 ) -> Tuple[Dict[Path, List[Path]], List[Path]]:
     """
     Liefert {directory: [missing mkv files]} und eine Liste übersprungener Temp-MKVs.
@@ -253,6 +260,8 @@ def collect_missing_series_dirs(
             logging.info("skip temp mkv from scan: %s", mkv)
             skipped.append(mkv)
             continue
+        if not is_recent_enough(mkv, cutoff_ts):
+            continue
         rel = mkv.relative_to(src_base)
         dest = dst_base / rel
         if not dest.exists():
@@ -262,7 +271,7 @@ def collect_missing_series_dirs(
 
 
 def collect_missing_movie_dirs(
-    movie_src_base: Path, movie_dst_base: Path
+    movie_src_base: Path, movie_dst_base: Path, cutoff_ts: float | None = None
 ) -> Tuple[Dict[Path, List[Path]], List[Path]]:
     """
     Liefert {directory: [mkv files]} für Movie-MKVs, deren Ziel fehlt,
@@ -279,6 +288,8 @@ def collect_missing_movie_dirs(
         if is_temp_mkv(mkv):
             logging.info("skip temp mkv from scan: %s", mkv)
             skipped.append(mkv)
+            continue
+        if not is_recent_enough(mkv, cutoff_ts):
             continue
 
         # movie jobs are published per parent dir. transcode_mqtt resolves the
@@ -341,6 +352,12 @@ def main():
         default=None,
         help="Pause in Sekunden zwischen MQTT-Jobs (Default: RESCAN_BATCH_SLEEP oder 0)",
     )
+    parser.add_argument(
+        "--days",
+        type=int,
+        default=None,
+        help="Nur RAW-MKVs aus den letzten N Tagen beruecksichtigen (optional)",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -374,6 +391,15 @@ def main():
         raise RuntimeError("batch-size must be > 0")
     if batch_sleep < 0:
         raise RuntimeError("batch-sleep must be >= 0")
+    if args.days is not None and args.days < 0:
+        raise RuntimeError("days must be >= 0")
+
+    cutoff_ts: float | None = None
+    cutoff_iso = "-"
+    if args.days is not None:
+        cutoff_dt = datetime.now(timezone.utc) - timedelta(days=args.days)
+        cutoff_ts = cutoff_dt.timestamp()
+        cutoff_iso = cutoff_dt.isoformat()
 
     src_base = Path(getenv("SRC_BASE", required=True)).expanduser().resolve()
     source_type_default = getenv("SOURCE_TYPE", "dvd").strip().lower()
@@ -398,7 +424,7 @@ def main():
     roots_label = ", ".join(f"{stype}={path}" for stype, path in source_roots)
     logging.info(
         "config: MQTT_TOPIC=%s, SRC_BASE=%s (roots=%s, series subpath=%s, movie subpath=%s), "
-        "SERIES_DST_BASE=%s, MOVIE_DST_BASE=%s, BATCH_SIZE=%d, BATCH_SLEEP=%ss",
+        "SERIES_DST_BASE=%s, MOVIE_DST_BASE=%s, BATCH_SIZE=%d, BATCH_SLEEP=%ss, DAYS=%s, CUTOFF_UTC=%s",
         MQTT_TOPIC,
         src_base,
         roots_label,
@@ -408,6 +434,8 @@ def main():
         movie_dst_base,
         batch_size,
         batch_sleep,
+        args.days if args.days is not None else "-",
+        cutoff_iso,
     )
 
     scan_results = []
@@ -417,10 +445,10 @@ def main():
         series_src_base = (source_root / series_subpath).resolve()
         movie_src_base = (source_root / movie_subpath).resolve()
         series_dirs, series_skipped = collect_missing_series_dirs(
-            series_src_base, series_dst_base
+            series_src_base, series_dst_base, cutoff_ts=cutoff_ts
         )
         movie_dirs, movie_skipped = collect_missing_movie_dirs(
-            movie_src_base, movie_dst_base
+            movie_src_base, movie_dst_base, cutoff_ts=cutoff_ts
         )
         scan_results.append(
             {

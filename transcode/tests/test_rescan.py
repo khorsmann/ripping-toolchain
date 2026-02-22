@@ -1,6 +1,7 @@
 import importlib.util
 import os
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -213,6 +214,64 @@ class RescanTests(unittest.TestCase):
             missing, skipped = mod.collect_missing_movie_dirs(movie_src, movie_dst)
             self.assertEqual(missing, {})
             self.assertEqual(skipped, [])
+
+    def test_collect_missing_series_dirs_honors_cutoff(self):
+        mod = load_rescan_module()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir)
+            series_src = base / "raw" / "Serien" / "Show" / "S01" / "disc01"
+            series_dst = base / "dst-series"
+            series_src.mkdir(parents=True, exist_ok=True)
+            series_dst.mkdir(parents=True, exist_ok=True)
+
+            old_file = series_src / "old.mkv"
+            new_file = series_src / "new.mkv"
+            old_file.touch()
+            new_file.touch()
+
+            now = time.time()
+            old_ts = now - 10 * 24 * 60 * 60
+            new_ts = now - 60
+            os.utime(old_file, (old_ts, old_ts))
+            os.utime(new_file, (new_ts, new_ts))
+
+            cutoff_ts = now - 3 * 24 * 60 * 60
+            missing, skipped = mod.collect_missing_series_dirs(
+                series_src.parent.parent.parent, series_dst, cutoff_ts=cutoff_ts
+            )
+
+            self.assertEqual(skipped, [])
+            self.assertIn(series_src, missing)
+            self.assertEqual(missing[series_src], [new_file])
+
+    def test_collect_missing_movie_dirs_honors_cutoff(self):
+        mod = load_rescan_module()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir)
+            movie_src = base / "raw" / "Filme" / "Movie"
+            movie_dst = base / "dst-movie"
+            movie_src.mkdir(parents=True, exist_ok=True)
+            movie_dst.mkdir(parents=True, exist_ok=True)
+
+            old_file = movie_src / "old.mkv"
+            new_file = movie_src / "new.mkv"
+            old_file.touch()
+            new_file.touch()
+
+            now = time.time()
+            old_ts = now - 10 * 24 * 60 * 60
+            new_ts = now - 60
+            os.utime(old_file, (old_ts, old_ts))
+            os.utime(new_file, (new_ts, new_ts))
+
+            cutoff_ts = now - 3 * 24 * 60 * 60
+            missing, skipped = mod.collect_missing_movie_dirs(
+                movie_src.parent, movie_dst, cutoff_ts=cutoff_ts
+            )
+
+            self.assertEqual(skipped, [])
+            self.assertIn(movie_src, missing)
+            self.assertEqual(missing[movie_src], [new_file])
 
 
 if __name__ == "__main__":
