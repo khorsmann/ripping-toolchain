@@ -50,6 +50,7 @@ transcode_mqtt (FFmpeg) <--- MQTT subscription
      - Before each file, it publishes `media/transcode/start` including input and output paths.
      - While `ffmpeg` runs, a lock at `/var/lock/vaapi.lock` keeps other instances off the GPU.
      - Hardware retries are configurable via `MAX_HW_RETRIES` (default 2 after the initial attempt).
+     - Video quality (and artifact level) is tunable via `QSV_GLOBAL_QUALITY_*`, `VAAPI_QP_*`, and `X265_CRF_*`; lower values improve quality at the cost of larger files.
      - After a successful transcode, it publishes `media/transcode/done`; failures land on `media/transcode/error`.
    - Idempotent: if the target file already exists, it is skipped.
    - Series go to `SERIES_DST_BASE` (default `/media/Serien`) mirroring the structure under `SRC_BASE/<SERIES_SUBPATH>` (default `Serien`). Movies (`mode=movie`) are stored under `MOVIE_DST_BASE` (default `/media/Filme`, overridable).

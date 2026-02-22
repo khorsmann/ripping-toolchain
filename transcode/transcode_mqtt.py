@@ -31,6 +31,17 @@ def getenv_bool(name, default="false"):
     return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def getenv_int(name: str, default: int, minimum: int | None = None) -> int:
+    raw = getenv(name, str(default))
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"{name} must be an integer, got {raw!r}") from exc
+    if minimum is not None and value < minimum:
+        raise RuntimeError(f"{name} must be >= {minimum}, got {value}")
+    return value
+
+
 TEMP_MKV_RE = re.compile(r"^[A-Za-z0-9]{2}_[A-Za-z][0-9]{2}\.mkv$", re.IGNORECASE)
 IDET_SINGLE_RE = re.compile(
     r"Single frame detection:\s*TFF:\s*(\d+)\s*BFF:\s*(\d+)\s*Progressive:\s*(\d+)\s*Undetermined:\s*(\d+)"
@@ -402,6 +413,12 @@ MAX_HW_RETRIES = max(0, int(getenv("MAX_HW_RETRIES", "2")))
 ENABLE_AAC_DOWNMIX = getenv_bool("ENABLE_AAC_DOWNMIX", "false")
 AUDIO_MODE = getenv("AUDIO_MODE", "auto").strip().lower()
 QSV_DIRECT = getenv_bool("QSV_DIRECT", "false")
+QSV_GLOBAL_QUALITY_BLURAY = getenv_int("QSV_GLOBAL_QUALITY_BLURAY", 20, minimum=1)
+QSV_GLOBAL_QUALITY_DVD = getenv_int("QSV_GLOBAL_QUALITY_DVD", 21, minimum=1)
+VAAPI_QP_BLURAY = getenv_int("VAAPI_QP_BLURAY", 21, minimum=0)
+VAAPI_QP_DVD = getenv_int("VAAPI_QP_DVD", 22, minimum=0)
+X265_CRF_BLURAY = getenv_int("X265_CRF_BLURAY", 20, minimum=0)
+X265_CRF_DVD = getenv_int("X265_CRF_DVD", 21, minimum=0)
 if AUDIO_MODE not in {"auto", "encode", "copy"}:
     raise RuntimeError("AUDIO_MODE must be 'auto', 'encode' or 'copy'")
 AUDIO_LANGS = parse_langs(getenv("AUDIO_LANGS"), "eng,ger,deu")
@@ -782,9 +799,13 @@ def transcode_dir(client, job: dict):
                 continue
             maps.extend(["-map", f"0:{stream_index}"])
 
-        qsv_global_quality = 21 if source_type == "bluray" else 25
-        vaapi_qp = 22 if source_type == "bluray" else 26
-        x265_crf = 21 if source_type == "bluray" else 25
+        qsv_global_quality = (
+            QSV_GLOBAL_QUALITY_BLURAY
+            if source_type == "bluray"
+            else QSV_GLOBAL_QUALITY_DVD
+        )
+        vaapi_qp = VAAPI_QP_BLURAY if source_type == "bluray" else VAAPI_QP_DVD
+        x265_crf = X265_CRF_BLURAY if source_type == "bluray" else X265_CRF_DVD
 
         def build_qsv_cmd() -> list[str]:
             cmd = [

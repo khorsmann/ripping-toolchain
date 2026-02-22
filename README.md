@@ -51,6 +51,7 @@ transcode_mqtt (FFmpeg) <--- MQTT subscription
      - Vor jeder Datei wird `media/transcode/start` inkl. Eingangs- und Ausgabepfad publiziert.
      - Während `ffmpeg` läuft, hält ein Lock unter `/var/lock/vaapi.lock` andere Instanzen von der GPU fern.
      - Hardware-Retries sind über `MAX_HW_RETRIES` konfigurierbar (Default 2 nach dem initialen Versuch).
+     - Videoqualität (und Artefakte) ist über `QSV_GLOBAL_QUALITY_*`, `VAAPI_QP_*` und `X265_CRF_*` steuerbar; kleinere Werte bedeuten bessere Qualität bei größerer Dateigröße.
      - Nach erfolgreichem Transcode wird `media/transcode/done` gesendet; Fehler landen auf `media/transcode/error`.
    - Idempotent: existiert die Zielfile bereits, wird sie übersprungen.
    - Serien landen unter `SERIES_DST_BASE` (Default `/media/Serien`) und spiegeln die Struktur unter `SRC_BASE/<SERIES_SUBPATH>` (Standard `Serien`). Filme (`mode=movie`) werden nach `MOVIE_DST_BASE` (Default `/media/Filme`, überschreibbar) abgelegt.
