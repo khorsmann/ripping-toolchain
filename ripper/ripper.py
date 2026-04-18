@@ -194,14 +194,47 @@ def sanitize_movie_name(name: str) -> str:
     return safe or "movie"
 
 
-def newest_mkv(outdir: Path):
+def single_created_mkv(outdir: Path) -> Path:
     """
-    Liefert die neueste MKV-Datei in einem Verzeichnis oder None, falls keine existiert.
+    Liefert die einzige MKV in einem frischen Arbeitsverzeichnis.
+    Bricht bei 0 oder mehreren MKVs ab, damit keine Episode falsch zugeordnet wird.
     """
     mkvs = list(outdir.glob("*.mkv"))
     if not mkvs:
-        return None
-    return max(mkvs, key=lambda p: p.stat().st_mtime)
+        raise RuntimeError("MakeMKV hat keine MKV-Datei erzeugt.")
+    if len(mkvs) > 1:
+        names = ", ".join(sorted(p.name for p in mkvs))
+        raise RuntimeError(
+            f"MakeMKV hat mehrere MKV-Dateien in {outdir} erzeugt: {names}"
+        )
+    return mkvs[0]
+
+
+def rip_title_to_output(disc_target: str, tid: int, tmp_dir: Path, out_file: Path) -> bool:
+    """
+    Rippt genau einen Titel in ein isoliertes Temp-Verzeichnis und verschiebt
+    die dort erzeugte MKV auf den finalen Dateinamen.
+    """
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    run(
+        [
+            "makemkvcon",
+            "--noscan",
+            "-r",
+            "mkv",
+            disc_target,
+            str(tid),
+            str(tmp_dir),
+        ]
+    )
+
+    created = single_created_mkv(tmp_dir)
+    if out_file.exists():
+        print(f"⚠ Ziel erschien während des Rippens, verwerfe neue Datei: {created}")
+        return False
+
+    created.rename(out_file)
+    return True
 
 
 def dvd_device_to_disc_target(device: str) -> str:
@@ -414,7 +447,7 @@ def main():
             raw_root / series_subpath / args.series / f"S{args.season}" / args.disc
         ).resolve()
         info_file = outdir / f"{args.disc}.info"
-        tmp_dir = None
+        tmp_dir = outdir / f"{args.disc}.tmp{secrets.token_hex(2)}"
     outdir.mkdir(parents=True, exist_ok=True)
     payload_files = []
 
@@ -449,6 +482,15 @@ def main():
     for t in usable:
         print(f"   - title {t['title_id']}: {t['minutes']} min ({t['duration']})")
 
+    if not movie_mode:
+        print("📌 Geplante Episoden-Zuordnung:")
+        for offset, t in enumerate(usable):
+            planned_episode = args.episode_start + offset
+            print(
+                f"   - title {t['title_id']} → "
+                f"{args.series}-S{args.season}E{planned_episode:02d}.mkv"
+            )
+
     usable_ids = {t["title_id"] for t in usable}
     ignored = [t for t in titles if t["title_id"] not in usable_ids]
     if ignored:
@@ -482,9 +524,7 @@ def main():
                 ]
             )
 
-            newest = newest_mkv(tmp_dir)
-            if newest is None:
-                raise RuntimeError("MakeMKV hat keine MKV-Datei erzeugt.")
+            newest = single_created_mkv(tmp_dir)
             if movie_output.exists():
                 print(
                     f"⚠ Ziel erschien während des Rippens, lasse neue Datei unbenannt: {newest}"
@@ -499,44 +539,28 @@ def main():
     else:
         episode = args.episode_start
 
-        for t in usable:
-            tid = t["title_id"]
-            filename = f"{args.series}-S{args.season}E{episode:02d}.mkv"
-            out_file = outdir / filename
-            payload_files.append(out_file)
+        try:
+            for t in usable:
+                tid = t["title_id"]
+                filename = f"{args.series}-S{args.season}E{episode:02d}.mkv"
+                out_file = outdir / filename
+                payload_files.append(out_file)
 
-            if out_file.exists():
-                print(f"⏭ Datei existiert bereits, überspringe: {out_file}")
-                episode += 1
-                continue
+                if out_file.exists():
+                    print(f"⏭ Datei existiert bereits, überspringe: {out_file}")
+                    episode += 1
+                    continue
 
-            print(f"🎬 Ripping title {tid} → {out_file}")
-            run(
-                [
-                    "makemkvcon",
-                    "--noscan",
-                    "-r",
-                    "mkv",
-                    disc_target,
-                    str(tid),
-                    str(outdir),
-                ]
-            )
-
-            # MakeMKV nennt die Datei meist anders (B1_t00.mkv).
-            # Wir benennen nachträglich um:
-            # finde die neueste MKV in outdir und verschiebe sie auf unseren Zielnamen.
-            newest = newest_mkv(outdir)
-            if newest is None:
-                raise RuntimeError("MakeMKV hat keine MKV-Datei erzeugt.")
-            if out_file.exists():
+                title_tmp_dir = tmp_dir / f"title{tid:02d}_E{episode:02d}"
                 print(
-                    f"⚠ Ziel erschien während des Rippens, lasse neue Datei unbenannt: {newest}"
+                    f"🎬 Ripping title {tid} → {out_file} "
+                    f"(tmp {title_tmp_dir.relative_to(outdir)})"
                 )
-            elif newest != out_file:
-                newest.rename(out_file)
+                rip_title_to_output(disc_target, tid, title_tmp_dir, out_file)
 
-            episode += 1
+                episode += 1
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
 
         episodes_ripped = episode - args.episode_start
         last_episode = episode - 1

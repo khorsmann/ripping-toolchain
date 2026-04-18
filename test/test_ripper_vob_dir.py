@@ -220,6 +220,90 @@ class TestRipperVobDir(unittest.TestCase):
             self.assertEqual(len(payloads), 1)
             self.assertIs(payloads[0]["interlaced"], True)
 
+    def test_series_rips_each_title_in_isolated_temp_dir(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir)
+            cfg = self.write_config(base)
+            vob_dir = base / "VIDEO_TS"
+            vob_dir.mkdir()
+            (vob_dir / "VTS_01_1.VOB").write_text("data")
+
+            outdir = base / "raw" / "dvd" / "Serien" / "Show" / "S01" / "disc01"
+            outdir.mkdir(parents=True)
+            stale = outdir / "stale-newest.mkv"
+            stale.write_bytes(b"stale")
+
+            info_text = "\n".join(
+                [
+                    'TINFO:7,9,0,"0:42:00"',
+                    'TINFO:3,9,0,"0:41:00"',
+                ]
+            )
+            ripped_titles = []
+            mkv_outdirs = []
+
+            def fake_run(cmd):
+                if cmd[3] == "info":
+                    return info_text
+                if cmd[3] == "mkv":
+                    tid = int(cmd[5])
+                    out_dir = Path(cmd[-1])
+                    mkv_outdirs.append(out_dir)
+                    out_dir.mkdir(parents=True, exist_ok=True)
+                    (out_dir / f"title_{tid}.mkv").write_bytes(f"title-{tid}".encode())
+                    ripped_titles.append(tid)
+                return ""
+
+            argv = [
+                "ripper.py",
+                "--series",
+                "Show",
+                "--season",
+                "01",
+                "--disc",
+                "disc01",
+                "--episode-start",
+                "5",
+                "--vob-dir",
+                str(vob_dir),
+                "--config",
+                str(cfg),
+            ]
+
+            with mock.patch.object(self.ripper.sys, "argv", argv):
+                with mock.patch.object(self.ripper, "run", side_effect=fake_run):
+                    with mock.patch.object(
+                        self.ripper, "mqtt_test_connection", return_value=False
+                    ):
+                        with mock.patch.object(self.ripper, "mqtt_publish"):
+                            with mock.patch.object(self.ripper.time, "sleep"):
+                                self.ripper.main()
+
+            self.assertEqual(ripped_titles, [3, 7])
+            self.assertEqual(
+                (outdir / "Show-S01E05.mkv").read_bytes(),
+                b"title-3",
+            )
+            self.assertEqual(
+                (outdir / "Show-S01E06.mkv").read_bytes(),
+                b"title-7",
+            )
+            self.assertEqual(stale.read_bytes(), b"stale")
+            self.assertTrue(mkv_outdirs)
+            for mkv_outdir in mkv_outdirs:
+                self.assertNotEqual(mkv_outdir, outdir)
+                self.assertEqual(mkv_outdir.parent.parent, outdir)
+            self.assertFalse(list(outdir.glob("*.tmp*")))
+
+    def test_single_created_mkv_rejects_ambiguous_temp_output(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir)
+            (base / "a.mkv").write_bytes(b"a")
+            (base / "b.mkv").write_bytes(b"b")
+
+            with self.assertRaisesRegex(RuntimeError, "mehrere MKV-Dateien"):
+                self.ripper.single_created_mkv(base)
+
 
 if __name__ == "__main__":
     unittest.main()
