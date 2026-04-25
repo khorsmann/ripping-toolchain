@@ -295,6 +295,84 @@ class TestRipperVobDir(unittest.TestCase):
                 self.assertEqual(mkv_outdir.parent.parent, outdir)
             self.assertFalse(list(outdir.glob("*.tmp*")))
 
+    def test_series_resume_skips_existing_episodes_and_keeps_title_mapping(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir)
+            cfg = self.write_config(base)
+            vob_dir = base / "VIDEO_TS"
+            vob_dir.mkdir()
+            (vob_dir / "VTS_01_1.VOB").write_text("data")
+
+            outdir = base / "raw" / "dvd" / "Serien" / "DEFIANCE" / "S03" / "03"
+            outdir.mkdir(parents=True)
+            (outdir / "DEFIANCE-S03E07.mkv").write_bytes(b"existing-7")
+            (outdir / "DEFIANCE-S03E08.mkv").write_bytes(b"existing-8")
+
+            info_text = "\n".join(
+                [
+                    'TINFO:0,9,0,"0:42:00"',
+                    'TINFO:1,9,0,"0:42:00"',
+                    'TINFO:2,9,0,"0:42:00"',
+                ]
+            )
+            ripped_titles = []
+            payloads = []
+
+            def fake_run(cmd):
+                if cmd[3] == "info":
+                    return info_text
+                if cmd[3] == "mkv":
+                    tid = int(cmd[5])
+                    out_dir = Path(cmd[-1])
+                    out_dir.mkdir(parents=True, exist_ok=True)
+                    (out_dir / f"title_{tid}.mkv").write_bytes(f"title-{tid}".encode())
+                    ripped_titles.append(tid)
+                return ""
+
+            def fake_publish(_config, payload):
+                payloads.append(payload)
+
+            argv = [
+                "ripper.py",
+                "--series",
+                "DEFIANCE",
+                "--season",
+                "03",
+                "--disc",
+                "03",
+                "--episode-start",
+                "7",
+                "--vob-dir",
+                str(vob_dir),
+                "--config",
+                str(cfg),
+            ]
+
+            with mock.patch.object(self.ripper.sys, "argv", argv):
+                with mock.patch.object(self.ripper, "run", side_effect=fake_run):
+                    with mock.patch.object(
+                        self.ripper, "mqtt_test_connection", return_value=False
+                    ):
+                        with mock.patch.object(
+                            self.ripper, "mqtt_publish", side_effect=fake_publish
+                        ):
+                            with mock.patch.object(self.ripper.time, "sleep"):
+                                self.ripper.main()
+
+            self.assertEqual(ripped_titles, [2])
+            self.assertEqual((outdir / "DEFIANCE-S03E07.mkv").read_bytes(), b"existing-7")
+            self.assertEqual((outdir / "DEFIANCE-S03E08.mkv").read_bytes(), b"existing-8")
+            self.assertEqual((outdir / "DEFIANCE-S03E09.mkv").read_bytes(), b"title-2")
+            self.assertEqual(len(payloads), 1)
+            self.assertEqual(
+                [Path(item).name for item in payloads[0]["files"]],
+                [
+                    "DEFIANCE-S03E07.mkv",
+                    "DEFIANCE-S03E08.mkv",
+                    "DEFIANCE-S03E09.mkv",
+                ],
+            )
+
     def test_single_created_mkv_rejects_ambiguous_temp_output(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             base = Path(tmpdir)
