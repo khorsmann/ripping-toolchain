@@ -84,3 +84,10 @@ transcode_mqtt (FFmpeg) <--- MQTT subscription
 - MQTT topics can be adjusted via environment variables; defaults are `media/rip/done` for inputs and `media/transcode/*` for status.
 - For fixing wrong aspect ratios, use `misc/fix-aspect.py` (sets DAR via `mkvpropedit` for explicitly specified files/directories).
 - The workflow exists solely to digitize personally purchased media for private use. Respect third-party rights (DRM, copyright); sharing or publicly providing ripped/transcoded files is not intended.
+
+
+## Tests
+
+- Install/sync dependencies: `uv sync --dev`
+- Run all tests: `uv run pytest`
+- Run a single test file: `uv run pytest test/test_ripper_vob_dir.py`

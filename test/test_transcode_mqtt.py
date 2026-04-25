@@ -133,9 +133,12 @@ class TestTranscodeHelpers(unittest.TestCase):
         build_qsv_filter = self.transcode.build_qsv_filter
         self.assertEqual(
             build_qsv_filter(True, False),
-            "bwdif=mode=send_frame:parity=auto:deint=all,format=nv12,hwupload=extra_hw_frames=64",
+            "format=nv12,hwupload=extra_hw_frames=64,vpp_qsv=deinterlace=1",
         )
-        self.assertIsNone(build_qsv_filter(False, False))
+        self.assertEqual(
+            build_qsv_filter(False, False),
+            "format=nv12,hwupload=extra_hw_frames=64,vpp_qsv=deinterlace=0",
+        )
         self.assertEqual(build_qsv_filter(True, True), "vpp_qsv=deinterlace=1")
 
     def test_probe_video_codec(self):

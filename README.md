@@ -93,5 +93,6 @@ transcode_mqtt (FFmpeg) <--- MQTT subscription
 
 ## Tests
 
-- Bestehende Misc-Tests: `python -m unittest discover -s misc -p 'test_*.py'`
-- Transcode/Rescan-Tests: `python -m unittest discover -s transcode/tests -p 'test_*.py'`
+- Abhängigkeiten installieren/synchronisieren: `uv sync --dev`
+- Alle Tests ausführen: `uv run pytest`
+- Einzelne Testdatei ausführen: `uv run pytest test/test_ripper_vob_dir.py`
